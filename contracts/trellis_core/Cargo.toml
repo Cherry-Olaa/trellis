@@ -6,7 +6,10 @@ license = "MIT"
 publish = false
 
 [lib]
-crate-type = ["cdylib"]
+# `rlib` is required so the `contract_bench` benchmark target can link against
+# the contract crate; `cdylib` is what the wasm deployment artefact is built
+# from.
+crate-type = ["cdylib", "rlib"]
 
 # soroban-sdk 22.x only — the on-chain ABI (env interface version) is tied to
 # the major version, and each minor/patch is expected to stay
