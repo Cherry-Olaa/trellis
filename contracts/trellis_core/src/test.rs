@@ -562,6 +562,94 @@ fn test_get_milestone_invalid_id_returns_none() {
 }
 
 // ---------------------------------------------------------------------------
+// Error-stability tests
+// ---------------------------------------------------------------------------
+
+/// Every `TrellisError` discriminant is permanent.
+///
+/// The enum's doc comment makes this a documented stability contract: the
+/// `u32` discriminants are serialised into the XDR `ScError` envelope and are
+/// therefore part of the public on-chain ABI, so a deployed consumer that
+/// switches on `11` must keep seeing `11` forever. Nothing in the type system
+/// stops a future edit from renumbering a variant, so pin the numbers here.
+///
+/// A new variant must be appended with the next free discriminant — `13` at
+/// the time of writing. When one is added, add it to this list rather than
+/// bumping an existing entry; if this test fails on an existing variant, that
+/// is a breaking ABI change, not a test to update.
+#[test]
+fn test_error_discriminants_are_stable() {
+    let expected: &[(TrellisError, u32)] = &[
+        (TrellisError::AlreadyInitialized, 1),
+        (TrellisError::Unauthorized, 2),
+        (TrellisError::AgreementNotFound, 3),
+        (TrellisError::InvalidMilestone, 4),
+        (TrellisError::InvalidStateTransition, 5),
+        // 6 is permanently vacant — formerly NoFundsToRefund, removed as dead
+        // code. Left unreused per the append-only rule.
+        (TrellisError::EmptyMilestoneSet, 7),
+        (TrellisError::ResolverCannotBeParty, 8),
+        (TrellisError::TotalAmountOverflow, 9),
+        (TrellisError::InvalidToken, 10),
+        (TrellisError::MilestoneCountExceeded, 11),
+        (TrellisError::PayerEqualsPayee, 12),
+    ];
+
+    for (variant, discriminant) in expected {
+        assert_eq!(
+            *variant as u32, *discriminant,
+            "{variant:?} must keep discriminant {discriminant} — renumbering breaks \
+             every deployed consumer that switches on the on-chain error code"
+        );
+    }
+}
+
+/// The `u32` a caller observes on-chain is the enum discriminant.
+///
+/// `#[contracterror]` serialises the discriminant into the XDR `ScError`
+/// envelope, so this is the number an SDK consumer matches on. The round-trip
+/// below goes through the same `From<TrellisError> for Error` /
+/// `TryFrom<Error> for TrellisError` pair the host uses, and proves the
+/// `#[non_exhaustive]` attribute added for #400 did not disturb the encoding:
+/// the attribute is a compile-time exhaustiveness marker and must be invisible
+/// on the wire.
+#[test]
+fn test_error_discriminants_round_trip_through_xdr() {
+    use soroban_sdk::Error;
+
+    let all = [
+        TrellisError::AlreadyInitialized,
+        TrellisError::Unauthorized,
+        TrellisError::AgreementNotFound,
+        TrellisError::InvalidMilestone,
+        TrellisError::InvalidStateTransition,
+        TrellisError::EmptyMilestoneSet,
+        TrellisError::ResolverCannotBeParty,
+        TrellisError::TotalAmountOverflow,
+        TrellisError::InvalidToken,
+        TrellisError::MilestoneCountExceeded,
+        TrellisError::PayerEqualsPayee,
+    ];
+
+    for variant in all {
+        let code = variant as u32;
+        let wire = Error::from(variant);
+        assert_eq!(
+            wire.get_code(),
+            code,
+            "{variant:?} must serialise to on-chain error code {code}"
+        );
+        assert_eq!(
+            TrellisError::try_from(wire).unwrap_or_else(|_| {
+                panic!("on-chain error code {code} must decode back to {variant:?}")
+            }),
+            variant,
+            "code {code} must round-trip back to the same variant"
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Authorization tests
 // ---------------------------------------------------------------------------
 
