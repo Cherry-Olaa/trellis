@@ -42,10 +42,7 @@
 //!    sweep with `PROPTEST_CASES=10000 cargo test test_properties`.
 
 use proptest::prelude::*;
-use soroban_sdk::{
-    testutils::Address as _,
-    token, Address, BytesN, Env, Vec,
-};
+use soroban_sdk::{testutils::Address as _, token, Address, BytesN, Env, Vec};
 
 use crate::{
     errors::TrellisError,
@@ -96,9 +93,8 @@ fn setup() -> (
 /// Build a `Vec<Milestone>` from a slice of amounts. All statuses are Pending.
 fn milestones_from_amounts(env: &Env, amounts: &[i128]) -> Vec<Milestone> {
     let mut v: Vec<Milestone> = Vec::new(env);
-    for (i, &amount) in amounts.iter().enumerate() {
+    for &amount in amounts.iter() {
         v.push_back(Milestone {
-            id: i as u32,
             amount,
             status: EscrowStatus::Pending,
             proof_uri: None,

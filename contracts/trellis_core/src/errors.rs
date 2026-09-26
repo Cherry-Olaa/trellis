@@ -45,7 +45,6 @@ pub enum TrellisError {
     // on a milestone that has left `Pending` is a state machine violation
     // ([`TrellisError::InvalidStateTransition`]), not a distinct economic
     // one. Left vacant rather than reused, per the append-only rule above.
-
     /// `init` was called with an empty `milestones` vector. An agreement with
     /// no milestones can never transition through any state, permanently
     /// wasting the storage it occupies.
@@ -66,4 +65,14 @@ pub enum TrellisError {
     /// The liveness probe (symbol() call) failed to verify the address
     /// represents an active, functional token contract.
     InvalidToken = 10,
+
+    /// `init` was called with more than `MAX_MILESTONES` milestones.
+    /// An oversized milestone list would make every later read, write and
+    /// status transition cost unbounded gas, so it is rejected up front.
+    MilestoneCountExceeded = 11,
+
+    /// `init` was called with `payer == payee`. A single address cannot both
+    /// fund the escrow and be paid out of it, which would let one party
+    /// unilaterally release its own funds.
+    PayerEqualsPayee = 12,
 }
