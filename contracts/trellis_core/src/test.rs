@@ -476,21 +476,24 @@ fn test_get_agreement() {
     // ── Happy path: agreement exists ──────────────────────────────────────
     let agreement = client.get_agreement(&id);
 
-    assert_eq!(agreement.payer, payer, "payer address must match");
-    assert_eq!(agreement.payee, payee, "payee address must match");
+    // `Agreement` derives `PartialEq`, so the whole struct read back from the
+    // contract is compared against the expected value in one assertion. This
+    // covers every field — including `total_amount`, `token` and
+    // `dispute_resolver`, which a field-by-field check tends to skip — and it
+    // keeps covering them automatically if a field is added later.
+    let expected = crate::types::Agreement {
+        agreement_id: id.clone(),
+        payer: payer.clone(),
+        payee: payee.clone(),
+        token: token_address.clone(),
+        milestones: one_milestone(&env, 750),
+        dispute_resolver: dispute_resolver.clone(),
+        total_amount: 750,
+    };
     assert_eq!(
-        agreement.milestones.len(),
-        1,
-        "should have exactly one milestone"
+        agreement, expected,
+        "get_agreement must round-trip the whole struct"
     );
-
-    let milestone = agreement.milestones.get(0).expect("milestone 0 must exist");
-    assert_eq!(
-        milestone.status,
-        crate::types::EscrowStatus::Pending,
-        "freshly created milestone must be Pending"
-    );
-    assert_eq!(milestone.amount, 750, "milestone amount must match");
 
     // ── Not-found path: unknown ID returns AgreementNotFound ──────────────
     let fake_id = agreement_id(&env, 99); // never initialized
@@ -500,6 +503,87 @@ fn test_get_agreement() {
         result.err().unwrap(),
         Ok(TrellisError::AgreementNotFound),
         "error must be AgreementNotFound"
+    );
+}
+
+/// Adjacent case to `test_get_agreement`: after a state transition, the whole
+/// `Agreement` read back must differ from the freshly-`init`ed one in exactly
+/// the milestone that moved — and in nothing else.
+///
+/// A field-by-field comparison would let a transition that also clobbered
+/// `total_amount`, `token` or `dispute_resolver` pass, as long as the fields it
+/// happened to look at were right. Comparing the full struct before and after
+/// pins down that `lock_funds` touches the status of milestone 1 and leaves
+/// every other field — and every other milestone — byte-identical.
+#[test]
+fn test_agreement_whole_struct_changes_only_the_locked_milestone() {
+    let (env, payer, payee, dispute_resolver, token_address, client) = setup();
+    let id = agreement_id(&env, 6);
+
+    let milestones = vec![
+        &env,
+        Milestone {
+            amount: 300,
+            status: EscrowStatus::Pending,
+            proof_uri: None,
+        },
+        Milestone {
+            amount: 400,
+            status: EscrowStatus::Pending,
+            proof_uri: None,
+        },
+    ];
+
+    client.init(
+        &id,
+        &payer,
+        &payee,
+        &token_address,
+        &milestones,
+        &dispute_resolver,
+    );
+
+    let before = client.get_agreement(&id);
+    assert_eq!(
+        before.total_amount, 700,
+        "total_amount must be the sum of both milestones"
+    );
+    assert!(
+        before
+            .milestones
+            .iter()
+            .all(|m| m.status == EscrowStatus::Pending),
+        "both milestones start Pending"
+    );
+
+    client.lock_funds(&id, &1u32);
+
+    let after = client.get_agreement(&id);
+
+    // Milestone 1 moved Pending -> Funded; milestone 0 did not.
+    let expected_locked = Milestone {
+        amount: 400,
+        status: EscrowStatus::Funded,
+        proof_uri: None,
+    };
+    assert_eq!(
+        after.milestones.get(1),
+        Some(expected_locked.clone()),
+        "milestone 1 must be Funded with its amount and proof_uri intact"
+    );
+    assert_eq!(
+        after.milestones.get(0),
+        before.milestones.get(0),
+        "locking milestone 1 must not disturb milestone 0"
+    );
+
+    // Everything outside `milestones` is unchanged by a lock: compare the full
+    // struct against `before` with only milestone 1's status swapped.
+    let mut expected_after = before.clone();
+    expected_after.milestones.set(1, expected_locked);
+    assert_eq!(
+        after, expected_after,
+        "lock_funds must change only milestone 1's status"
     );
 }
 

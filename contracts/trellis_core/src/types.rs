@@ -23,9 +23,17 @@ pub enum EscrowStatus {
 
 // ---------------------------------------------------------------------------
 // Milestone — a single deliverable within an Agreement
+//
+// `Eq`/`PartialEq` are derived so a `Milestone` read back from the contract can
+// be compared to an expected value with a single `assert_eq!` instead of a
+// hand-written field-by-field loop. Deriving them costs nothing at runtime —
+// `#[contracttype]` serialisation is unchanged — and it means a new field added
+// here is automatically covered by every existing equality assertion, rather
+// than silently left out of one that only happens to pluck the fields it knew
+// about when it was written.
 // ---------------------------------------------------------------------------
 #[contracttype]
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Milestone {
     /// Token amount (in the smallest denomination) locked for this milestone.
     ///
@@ -46,9 +54,14 @@ pub struct Milestone {
 
 // ---------------------------------------------------------------------------
 // Agreement — top-level escrow record stored on-chain
+//
+// See the note on [`Milestone`] for why `Eq`/`PartialEq` are derived: it lets a
+// whole agreement read back from `get_agreement` be asserted with one
+// `assert_eq!`, so no field can be added here without every existing equality
+// assertion noticing.
 // ---------------------------------------------------------------------------
 #[contracttype]
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Agreement {
     /// Globally unique identifier for this agreement (32-byte hash).
     pub agreement_id: BytesN<32>,
