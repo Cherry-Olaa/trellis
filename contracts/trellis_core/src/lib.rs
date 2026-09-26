@@ -3,7 +3,7 @@
 mod errors;
 mod events;
 mod storage;
-mod types;
+pub mod types;
 
 #[cfg(test)]
 mod test;
@@ -75,6 +75,14 @@ impl TrellisContract {
     ///   an agreement could never transition through any state.
     /// - [`TrellisError::ResolverCannotBeParty`] if `dispute_resolver` equals
     ///   `payer` or `payee` — the resolver must be a neutral third party.
+    /// - [`TrellisError::PayerEqualsPayee`] if `payer == payee`.
+    /// - [`TrellisError::MilestoneCountExceeded`] if more than
+    ///   `MAX_MILESTONES` milestones are supplied.
+    /// - [`TrellisError::InvalidToken`] if `token` is not a live token contract.
+    /// - [`TrellisError::InvalidMilestone`] if any milestone amount is zero
+    ///   or negative.
+    /// - [`TrellisError::TotalAmountOverflow`] if the milestone amounts sum to
+    ///   more than `i128::MAX`.
     pub fn init(
         env: Env,
         agreement_id: BytesN<32>,
@@ -94,7 +102,7 @@ impl TrellisContract {
             return Err(TrellisError::EmptyMilestoneSet);
         }
 
-        if milestones.len() > MAX_MILESTONES as usize {
+        if milestones.len() > MAX_MILESTONES {
             return Err(TrellisError::MilestoneCountExceeded);
         }
 
@@ -106,7 +114,14 @@ impl TrellisContract {
             return Err(TrellisError::ResolverCannotBeParty);
         }
 
-        token::Client::new(&env, &token).try_symbol().ok_or(TrellisError::InvalidToken)?;
+        // Liveness probe: the token address must be a live token contract, so
+        // `symbol()` has to succeed. Both failure modes — a host trap from a
+        // non-contract address and a decode failure from a contract that does
+        // not return a symbol — map to `InvalidToken` rather than propagating.
+        token::Client::new(&env, &token)
+            .try_symbol()
+            .map_err(|_| TrellisError::InvalidToken)?
+            .map_err(|_| TrellisError::InvalidToken)?;
 
         let total_amount = validate_milestones(&milestones)?;
 
@@ -512,7 +527,11 @@ impl TrellisContract {
                 .milestones
                 .get(milestone_id)
                 .ok_or(TrellisError::InvalidMilestone)?;
-            token.transfer(&agreement.payer, &env.current_contract_address(), &milestone.amount);
+            token.transfer(
+                &agreement.payer,
+                &env.current_contract_address(),
+                &milestone.amount,
+            );
         }
 
         Ok(funded)
@@ -586,7 +605,9 @@ fn validate_milestones(milestones: &Vec<Milestone>) -> Result<i128, TrellisError
         if m.amount <= 0 {
             return Err(TrellisError::InvalidMilestone);
         }
-        total = total.checked_add(m.amount).ok_or(TrellisError::TotalAmountOverflow)?;
+        total = total
+            .checked_add(m.amount)
+            .ok_or(TrellisError::TotalAmountOverflow)?;
     }
     Ok(total)
 }
