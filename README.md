@@ -524,7 +524,7 @@ npm install
 npm run dev
 ```
 
-Open **http://localhost:5173** to see the animated landing page with the particle network background, typewriter effects, and full agreement management UI.
+Open **http://localhost:5173** to see the animated landing page with the particle network background, typewriter effects, live contract activity stats (agreements created / milestones locked, within the RPC event retention window), and full agreement management UI.
 
 ### 🛠️ Build and test the contract
 
