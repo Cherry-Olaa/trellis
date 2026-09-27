@@ -456,6 +456,138 @@ fn test_batch_lock_funds_partial_failure() {
     );
 }
 
+/// An empty `milestone_ids` is a true no-op: `Ok(0)`, no state write, no event,
+/// no token movement.
+///
+/// Before the early return, the loop body never ran but `write_agreement` still
+/// did — rewriting the agreement byte-for-byte identically and bumping its TTL.
+/// That is a persistent write the caller pays for with no observable effect, on
+/// every no-op call. The write is not directly observable in the ledger, so it is
+/// pinned down by its two consequences instead: no `funds_locked` event, and the
+/// agreement read back afterwards is unchanged.
+#[test]
+fn test_batch_lock_funds_empty_vec_is_a_no_op() {
+    let (env, payer, payee, dispute_resolver, token_address, client) = setup();
+    let token_client = token::TokenClient::new(&env, &token_address);
+    let id = agreement_id(&env, 12);
+
+    let milestones = vec![
+        &env,
+        Milestone {
+            amount: 500,
+            status: EscrowStatus::Pending,
+            proof_uri: None,
+        },
+        Milestone {
+            amount: 500,
+            status: EscrowStatus::Pending,
+            proof_uri: None,
+        },
+    ];
+
+    client.init(
+        &id,
+        &payer,
+        &payee,
+        &token_address,
+        &milestones,
+        &dispute_resolver,
+    );
+
+    let before = client.get_agreement(&id);
+    let payer_before = token_client.balance(&payer);
+    let total_before = client.get_total_amount(&id);
+
+    let empty: Vec<u32> = Vec::new(&env);
+    let funded = client.batch_lock_funds(&id, &empty);
+
+    assert_eq!(funded, 0u32, "an empty batch must fund nothing");
+    assert_trellis_topics(
+        &env,
+        &client.address,
+        &[],
+        "an empty batch must not emit any Trellis event",
+    );
+
+    // `get_agreement` is a read-only view, so reading it here does not itself
+    // dirty the entry under test.
+    let after = client.get_agreement(&id);
+    assert_eq!(
+        after.milestones, before.milestones,
+        "an empty batch must leave every milestone untouched"
+    );
+    assert_eq!(
+        after.total_amount, total_before,
+        "an empty batch must not change total_amount"
+    );
+    assert_eq!(
+        after.agreement_id, before.agreement_id,
+        "an empty batch must not change the stored agreement ID"
+    );
+    assert_eq!(
+        after.payer, before.payer,
+        "an empty batch must not change the payer"
+    );
+    assert_eq!(
+        after.dispute_resolver, before.dispute_resolver,
+        "an empty batch must not change the dispute resolver"
+    );
+    assert_eq!(
+        token_client.balance(&payer),
+        payer_before,
+        "an empty batch must not move any tokens"
+    );
+    assert_eq!(
+        token_client.balance(&client.address),
+        0,
+        "an empty batch must leave the contract balance at zero"
+    );
+}
+
+/// Adjacent case: an empty batch against an unknown agreement ID must still be
+/// rejected.
+///
+/// The early return is placed *after* `read_agreement`, so an empty batch cannot
+/// be used to probe or bypass the agreement-existence check — hoisting it above
+/// the read would make every unknown ID quietly return `Ok(0)`.
+#[test]
+fn test_batch_lock_funds_empty_vec_still_requires_a_known_agreement() {
+    let (env, _payer, _payee, _dispute_resolver, _token_address, client) = setup();
+
+    let missing = agreement_id(&env, 98);
+    let empty: Vec<u32> = Vec::new(&env);
+    assert_eq!(
+        client.try_batch_lock_funds(&missing, &empty),
+        Err(Ok(TrellisError::AgreementNotFound)),
+        "an empty batch against an unknown ID must still return AgreementNotFound"
+    );
+}
+
+/// Adjacent case: an empty batch must not bypass the payer's authorisation.
+///
+/// Same reasoning for `require_auth` — it runs before the early return, so an
+/// empty batch is a well-formed call that still has to be authorised, not a free
+/// no-op anyone can invoke.
+#[test]
+#[should_panic(expected = "InvalidAction")]
+fn test_batch_lock_funds_empty_vec_still_requires_auth() {
+    let (env, payer, payee, dispute_resolver, token_address, client) = setup();
+    let id = agreement_id(&env, 13);
+
+    client.init(
+        &id,
+        &payer,
+        &payee,
+        &token_address,
+        &one_milestone(&env, 500),
+        &dispute_resolver,
+    );
+
+    // With auth mocking off, the contract's own gate traps.
+    deny_all_auth(&env);
+    client.batch_lock_funds(&id, &Vec::new(&env));
+}
+
 /// get_agreement returns the correct Agreement after init, and AgreementNotFound
 /// for an ID that was never initialized.
 #[test]
