@@ -1609,6 +1609,114 @@ mod tests {
         assert!(matches!(env["events"], serde_json::Value::Array(ref a) if a.len() == 1));
     }
 
+    // --- confirm_action (#409) ---
+    //
+    // These tests pin the gate behaviour that was missing from four of the
+    // seven state-mutating commands before issue #409 was fixed:
+    //   run_lock_funds, run_approve_release, run_raise_dispute,
+    //   run_cancel_milestone.
+    //
+    // The tests exercise confirm_action directly because the run_* functions
+    // shell out to the stellar binary (unavailable in unit-test context).
+    // Integration tests for the full --yes / --quiet flow live in
+    // tests/cli_integration.rs.
+
+    fn non_interactive_opts() -> OutputOpts {
+        OutputOpts {
+            format: OutputFormat::Raw,
+            quiet: false,
+            dry_run: false,
+        }
+    }
+
+    fn quiet_opts() -> OutputOpts {
+        OutputOpts {
+            format: OutputFormat::Json,
+            quiet: true,
+            dry_run: false,
+        }
+    }
+
+    fn dry_run_confirm_opts() -> OutputOpts {
+        OutputOpts {
+            format: OutputFormat::Raw,
+            quiet: false,
+            dry_run: true,
+        }
+    }
+
+    /// --yes bypasses the prompt unconditionally; confirm_action must return Ok.
+    /// Covers the skip-confirm path for all four newly-gated commands.
+    #[test]
+    fn confirm_action_yes_flag_bypasses_prompt() {
+        let opts = non_interactive_opts();
+        assert!(
+            confirm_action("This will lock funds for milestone 0 of agreement abc.", true, &opts)
+                .is_ok(),
+            "lock_funds: --yes should bypass prompt"
+        );
+        assert!(
+            confirm_action(
+                "This will approve milestone 0 of agreement abc and release funds to the payee.",
+                true,
+                &opts,
+            )
+            .is_ok(),
+            "approve_release: --yes should bypass prompt"
+        );
+        assert!(
+            confirm_action(
+                "This will raise a dispute on milestone 0 of agreement abc.",
+                true,
+                &opts,
+            )
+            .is_ok(),
+            "raise_dispute: --yes should bypass prompt"
+        );
+        assert!(
+            confirm_action(
+                "This will cancel milestone 0 of agreement abc.",
+                true,
+                &opts,
+            )
+            .is_ok(),
+            "cancel_milestone: --yes should bypass prompt"
+        );
+    }
+
+    /// --quiet without --yes must return an Err directing the caller to use
+    /// --yes. This prevents non-interactive scripts from hanging on stdin.
+    #[test]
+    fn confirm_action_quiet_without_yes_returns_err() {
+        let opts = quiet_opts();
+        let err = confirm_action(
+            "This will lock funds for milestone 0 of agreement abc.",
+            false,
+            &opts,
+        )
+        .unwrap_err();
+        assert!(
+            err.contains("--yes"),
+            "error should mention --yes flag, got: {err:?}"
+        );
+    }
+
+    /// --dry-run bypasses the prompt regardless of --yes, matching the
+    /// documented guarantee that dry-run never blocks on interactive input.
+    #[test]
+    fn confirm_action_dry_run_bypasses_prompt() {
+        let opts = dry_run_confirm_opts();
+        assert!(
+            confirm_action(
+                "This will approve milestone 1 of agreement abc and release funds to the payee.",
+                false, // yes=false; dry_run alone should be enough
+                &opts,
+            )
+            .is_ok(),
+            "dry-run should bypass prompt even without --yes"
+        );
+    }
+
     // --- render_raw ---
 
     #[test]
