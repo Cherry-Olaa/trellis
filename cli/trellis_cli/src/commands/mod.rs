@@ -422,6 +422,22 @@ fn run_keys(subcmd: KeysSubcommand) -> Result<(), String> {
 ///
 /// Rejects any value that could be used to inject additional CLI flags or
 /// smuggle shell metacharacters through the argument list.
+///
+/// # Wiring (keep in sync!)
+///
+/// Every handler in this module that accepts an `--agreement-id` **must** call
+/// this as its first statement, before `confirm_action` and before any
+/// argument is built — otherwise the value reaches `execute` → `RpcClient`
+/// unchecked. As of #405 all nine do: `run_init`, `run_lock_funds`,
+/// `run_submit_work`, `run_approve_release`, `run_raise_dispute`,
+/// `run_resolve_dispute`, `run_cancel_milestone`, `run_status`,
+/// `run_milestone_status`.
+///
+/// `tests/cli_integration.rs::test_injected_agreement_id_rejected_by_every_command`
+/// drives every one of those handlers without `--dry-run` and fails if any of
+/// them stops calling this, so dropping a call cannot regress silently. When
+/// adding a command that takes an agreement ID, add it to the
+/// `agreement_id_commands()` table in that file too.
 fn validate_agreement_id(id: &str) -> Result<(), String> {
     crate::sanitizer::sanitize_hex_id(id)?;
     if crate::utils::is_valid_hex(id, 64) {
@@ -1428,6 +1444,23 @@ mod tests {
         // space injection attempt
         let id = format!("{} --extra-flag x {}", "a".repeat(30), "b".repeat(30));
         assert!(validate_agreement_id(&id).is_err());
+    }
+
+    /// A 64-hex ID with a trailing `;` is 65 chars of which the first 64 are
+    /// valid hex — a length-only or prefix check would let it through, and the
+    /// `;` would reach the argument vector as a second argv entry.
+    ///
+    /// This is the adjacent case for the integration test of the same name;
+    /// it lives here because a length-only regression must be caught at the
+    /// guard itself, not only through the command handlers.
+    #[test]
+    fn agreement_id_rejects_valid_hex_prefix_with_trailing_metacharacter() {
+        let id = format!("{};", "a".repeat(64));
+        assert_eq!(id.len(), 65);
+        assert!(
+            validate_agreement_id(&id).is_err(),
+            "a valid 64-hex prefix must not license a trailing metacharacter"
+        );
     }
 
     #[test]
