@@ -68,7 +68,56 @@ interface RpcGetEventsResponse {
   }
 }
 
-async function fetchEventCount(topicSymbol: string, startLedger: number, signal: AbortSignal): Promise<number> {
+interface RpcGetHealthResponse {
+  result?: {
+    status: string
+    latestLedger: number
+    oldestLedger: number
+    ledgerRetentionWindow: number
+  }
+  error?: {
+    code: number
+    message: string
+  }
+}
+
+/**
+ * Soroban RPC only retains events for a bounded window of recent ledgers and
+ * rejects a getEvents `startLedger` that falls before it. Ask the node for the
+ * oldest ledger it still holds and start there, so the query stays valid as
+ * the network advances.
+ */
+async function fetchOldestLedger(signal: AbortSignal): Promise<number> {
+  const response = await fetch(RPC_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'getHealth' }),
+    signal,
+  })
+
+  if (!response.ok) {
+    throw new Error(`RPC HTTP ${response.status}: ${response.statusText}`)
+  }
+
+  const json: RpcGetHealthResponse = await response.json()
+
+  if (json.error) {
+    throw new Error(`RPC error ${json.error.code}: ${json.error.message}`)
+  }
+
+  const oldestLedger = json.result?.oldestLedger
+  if (typeof oldestLedger !== 'number' || oldestLedger < 1) {
+    throw new Error('RPC getHealth did not report an oldestLedger')
+  }
+
+  return oldestLedger
+}
+
+async function fetchEventCount(
+  topicSymbol: string,
+  startLedger: number,
+  signal: AbortSignal,
+): Promise<number> {
   const topicXdr = encodeTopicFilter(topicSymbol)
 
   const body: RpcGetEventsRequest = {
@@ -135,7 +184,7 @@ export function useContractStats(): UseContractStatsResult {
     const requestId = ++requestIdRef.current
 
     try {
-      const startLedger = await getRecentStartLedger(signal)
+      const startLedger = await fetchOldestLedger(signal)
       const [agreements, milestonesLocked] = await Promise.all([
         fetchEventCount('created', startLedger, signal),
         fetchEventCount('locked', startLedger, signal),

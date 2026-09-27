@@ -1,5 +1,10 @@
 # Trellis — Testnet Deployment
 
+> **Working directory:** Run deployment commands from the repository root. Each
+> step begins with `cd "$(git rev-parse --show-toplevel)"` so it can be run
+> independently from any directory inside the repository. Paths to build
+> artifacts below are relative to the repository root.
+
 ## Live Contract
 
 | Network | Contract ID |
@@ -58,6 +63,7 @@ signature alongside every WASM/CLI binary artifact.
 ### Step 1 — Create and fund a testnet identity
 
 ```bash
+cd "$(git rev-parse --show-toplevel)"
 stellar keys generate trellis-deployer --network testnet
 stellar keys fund trellis-deployer --network testnet --rpc-url https://soroban-testnet.stellar.org
 ```
@@ -65,8 +71,8 @@ stellar keys fund trellis-deployer --network testnet --rpc-url https://soroban-t
 ### Step 2 — Build the contract WASM
 
 ```bash
-cd contracts/trellis_core
-cargo rustc --manifest-path=Cargo.toml --crate-type=cdylib --target=wasm32-unknown-unknown --release
+cd "$(git rev-parse --show-toplevel)"
+cargo rustc --manifest-path=contracts/trellis_core/Cargo.toml --crate-type=cdylib --target=wasm32-unknown-unknown --release
 ```
 
 > **Note:** Use `cargo rustc` with `--target=wasm32-unknown-unknown` rather than
@@ -82,8 +88,9 @@ target/wasm32-unknown-unknown/release/trellis_core.wasm
 ### Step 3 — Deploy to testnet
 
 ```bash
+cd "$(git rev-parse --show-toplevel)"
 stellar contract deploy \
-  --wasm ../../target/wasm32-unknown-unknown/release/trellis_core.wasm \
+  --wasm target/wasm32-unknown-unknown/release/trellis_core.wasm \
   --source trellis-deployer \
   --network testnet
 ```
@@ -93,6 +100,7 @@ This returns a `C...` contract address. Save it — you'll need it for all CLI c
 ### Step 4 — Set environment variables
 
 ```bash
+cd "$(git rev-parse --show-toplevel)"
 export STELLAR_RPC_URL="https://soroban-testnet.stellar.org"
 export STELLAR_NETWORK_PASSPHRASE="Test SDF Network ; September 2015"
 export TRELLIS_CONTRACT_ID="<your contract ID>"
@@ -102,11 +110,12 @@ export TRELLIS_SOURCE_KEY="<your stellar identity name>"
 ### Step 5 — Build the CLI
 
 ```bash
-cd cli/trellis_cli
-cargo build --release
+cd "$(git rev-parse --show-toplevel)"
+cargo build --release --manifest-path=cli/trellis_cli/Cargo.toml
 ```
 
-Binary will be at: `target/release/trellis.exe` (Windows) or `target/release/trellis` (Linux/Mac)
+Binary will be at `target/release/trellis.exe` (Windows) or
+`target/release/trellis` (Linux/Mac), relative to the repository root.
 
 ---
 
