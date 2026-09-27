@@ -1,8 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
-import type { Agreement, SorobanEvent } from '../lib/soroban';
-import { getAgreement, sorobanServer } from '../lib/soroban';
-import { useWallet } from '../lib/useWallet';
+import { useWallet } from '../context/WalletContext';
 import { addToHistory } from '../lib/history';
 import { isValidHexAgreementId } from '../lib/agreementId';
 import { useAgreement } from '../hooks/useAgreement';
@@ -11,9 +9,7 @@ import { ExplorerLink } from '../components/ExplorerLink';
 import MilestoneRow from '../components/MilestoneRow';
 import MilestoneCard from '../components/MilestoneCard';
 import StatsBar from '../components/StatsBar';
-import { ExplorerLink } from '../components/ExplorerLink';
 import { AgreementCardSkeleton } from '../components/skeletons';
-import { ExplorerLink } from '../components/ExplorerLink';
 
 export default function StatusPage() {
   const { id: urlId } = useParams<{ id: string }>();
@@ -33,8 +29,10 @@ export default function StatusPage() {
   const [validationError, setValidationError] = useState<string | null>(null);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
 
-  // Real on-chain reads — the previous local `queryAgreement` stub always threw,
-  // so the page could never display an agreement (issue #251).
+  // Real on-chain reads: `useAgreement` simulates the contract's `get_agreement`
+  // via `useContractRead`, and `useAgreementEvents` polls RPC `getEvents`. The
+  // old local `queryAgreement`/`queryEvents` stubs always threw / returned
+  // nothing, so the page could never display an agreement (issues #251, #418).
   const { agreement, isLoading, isError, error, refetch } = useAgreement(queriedId);
   const {
     events,
@@ -61,23 +59,9 @@ export default function StatusPage() {
       setValidationError(null);
       setQueriedId(id);
       navigate(`/agreement/${id}`);
-
-      // Query agreement using contract read call
-      const agreement = await getAgreement(id);
-      setAgreement(agreement);
-
-      // Query events
-      const events = await queryEvents();
-      setEvents(events);
-      setLastUpdated(new Date());
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to query agreement');
-      setAgreement(null);
-      setEvents([]);
-    } finally {
-      setLoading(false);
-    }
-  }, [navigate]);
+    },
+    [navigate],
+  );
 
   const handleSearch = (e: React.FormEvent) => {
     e.preventDefault();
@@ -227,7 +211,7 @@ export default function StatusPage() {
                     milestone={milestone}
                     agreement={agreement}
                     wallet={wallet}
-                    onUpdate={() => handleQuery(agreementId)}
+                    onUpdate={refetch}
                   />
                 ))}
               </div>
@@ -264,33 +248,3 @@ export default function StatusPage() {
   );
 }
 
-async function queryEvents(): Promise<SorobanEvent[]> {
-  // Query events from Soroban RPC
-  // This is a simplified implementation
-  try {
-    const events = await sorobanServer.getEvents({
-      startLedger: 0,
-      limit: 100,
-      filters: [
-        {
-          type: 'contract',
-          contractIds: [CONTRACT_ID],
-        },
-      ],
-    });
-
-    const rawEvents: unknown[] = events.events || [];
-    return rawEvents
-      .filter(isValidEventResponse)
-      .map((event: RawEventResponse) => ({
-        type: 'event',
-        ledger: event.ledger || 0,
-        txHash: event.txHash || '',
-        timestamp: Date.now(),
-        data: {},
-      }));
-  } catch (error) {
-    console.error('Failed to fetch events:', error);
-    return [];
-  }
-}

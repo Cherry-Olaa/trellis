@@ -30,6 +30,9 @@ export default function MilestoneActions({ milestone, agreement, onSuccess }: Mi
   const isUserPayer = wallet.publicKey === agreement.payer
   const isUserPayee = wallet.publicKey === agreement.payee
 
+  // lock_funds, submit_work and approve_and_release take no caller argument —
+  // the contract derives the signer from agreement.payer / agreement.payee via
+  // require_auth(). Only raise_dispute takes an explicit leading `caller`.
   const handleLockFunds = async (fee?: string) => {
     if (!wallet.publicKey) return
 
@@ -37,7 +40,6 @@ export default function MilestoneActions({ milestone, agreement, onSuccess }: Mi
     try {
       const idBytes = hexToBytes(agreement.agreement_id)
       const args = [
-        nativeToScVal(wallet.publicKey, { type: 'address' }),
         nativeToScVal(idBytes, { type: 'bytes' }),
         nativeToScVal(milestone.id, { type: 'u32' }),
       ]
@@ -60,7 +62,6 @@ export default function MilestoneActions({ milestone, agreement, onSuccess }: Mi
     try {
       const idBytes = hexToBytes(agreement.agreement_id)
       const args = [
-        nativeToScVal(wallet.publicKey, { type: 'address' }),
         nativeToScVal(idBytes, { type: 'bytes' }),
         nativeToScVal(milestone.id, { type: 'u32' }),
         nativeToScVal(proofUri, { type: 'string' }),
@@ -86,7 +87,6 @@ export default function MilestoneActions({ milestone, agreement, onSuccess }: Mi
     try {
       const idBytes = hexToBytes(agreement.agreement_id)
       const args = [
-        nativeToScVal(wallet.publicKey, { type: 'address' }),
         nativeToScVal(idBytes, { type: 'bytes' }),
         nativeToScVal(milestone.id, { type: 'u32' }),
       ]
