@@ -3,7 +3,7 @@
 # Available targets:
 #   make help          — list all targets
 #   make build         — build everything (contract WASM + frontend)
-#   make test          — run all tests (contract + frontend)
+#   make test          — run all tests (contract + CLI + frontend)
 #   make lint          — run all linters (clippy + oxlint)
 #   make fmt           — run cargo fmt on the workspace
 #   make typecheck-frontend — run tsc typecheck on the frontend
@@ -14,6 +14,7 @@
 #   make build-cli     — build only the CLI binary
 #   make build-frontend — build only the frontend bundle
 #   make test-contract — run only contract tests
+#   make test-cli      — run only CLI tests
 #   make test-snapshots-update — regenerate Soroban test snapshots (commit the result)
 #   make test-frontend — run only frontend tests
 #   make lint-contract — run only clippy on contract and CLI
@@ -22,7 +23,7 @@
 
 .PHONY: help build test lint fmt deploy clean setup
 .PHONY: build-contract build-cli build-frontend
-.PHONY: test-contract test-snapshots-update test-frontend
+.PHONY: test-contract test-cli test-snapshots-update test-frontend
 .PHONY: lint-contract lint-frontend typecheck-frontend
 .PHONY: changelog
 
@@ -51,10 +52,16 @@ build-frontend:
 
 # ── Test ───────────────────────────────────────────────────────────────────
 
-test: test-contract test-frontend
+test: test-contract test-cli test-frontend
 
 test-contract:
 	cargo test --frozen --manifest-path contracts/trellis_core/Cargo.toml
+
+# CI does not shell out to make: the `verify` job in
+# .github/workflows/contract-ci.yml runs `cargo test --workspace`, which
+# already covers cli/trellis_cli. This target keeps `make test` in parity.
+test-cli:
+	cargo test --frozen --manifest-path cli/trellis_cli/Cargo.toml
 
 test-snapshots-update:
 	SOROBAN_TEST_SNAPSHOT_FILE=overwrite cargo test --manifest-path contracts/trellis_core/Cargo.toml

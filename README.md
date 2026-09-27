@@ -524,7 +524,7 @@ npm install
 npm run dev
 ```
 
-Open **http://localhost:5173** to see the animated landing page with the particle network background, typewriter effects, and full agreement management UI.
+Open **http://localhost:5173** to see the animated landing page with the particle network background, typewriter effects, live contract activity stats (agreements created / milestones locked, within the RPC event retention window), and full agreement management UI.
 
 ### 🛠️ Build and test the contract
 
@@ -554,6 +554,16 @@ locally:
 cargo install --locked cargo-deny cargo-audit
 cargo deny check      # enforces deny.toml: advisories, licences, duplicate versions, sources
 cargo audit           # RustSec advisory database check
+```
+
+Note: Keep Cargo.lock in sync with Cargo.toml. CI now verifies the
+lockfile with `cargo check --locked --workspace` and will fail if it's out
+of date. To update the lockfile locally after changing dependencies run:
+
+```bash
+cargo update -p <pkg>
+# or to generate/update the lockfile explicitly:
+cargo generate-lockfile
 ```
 
 Policy lives in [`deny.toml`](./deny.toml) at the repository root. A new
@@ -626,6 +636,12 @@ trellis status --agreement-id <hex-id> --quiet
 trellis status --agreement-id <hex-id> --human-readable   # or -H
 ```
 
+`--dry-run` prints the `stellar contract invoke` command that would be executed
+without actually running it or submitting anything on-chain. Because it never
+spawns the `stellar` binary, it works on machines where the Stellar CLI is not
+installed — useful for previewing command construction in CI or on a fresh
+checkout.
+
 `--json` takes priority over `--human-readable` when both are passed.
 
 #### Shell Completions
@@ -656,7 +672,7 @@ Supported shells: `bash`, `zsh`, `fish`, `elvish`, `powershell`.
 - Deployed live on Stellar testnet — `init` and `status` verified against the live contract
 - Frontend dashboard — 5 pages, 28 components, 12 custom hooks, animated particle network background
 - Wallet connect — Freighter wallet integration with connection states
-- Event feed — real-time on-chain event history per agreement
+- Event feed — real-time on-chain event history per agreement (limited to the last ~100k ledgers, ~6 days, that RPC providers retain; full history awaits an event-indexing service, #496)
 - Shell completions — bash, zsh, fish, elvish, powershell
 
 ### 🚧 Open for Contribution
