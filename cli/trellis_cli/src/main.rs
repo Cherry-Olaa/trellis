@@ -104,20 +104,28 @@ struct Cli {
 // Environment validation (#68)
 // ---------------------------------------------------------------------------
 
-/// Verify that the `stellar` CLI binary is available in `PATH`.
+/// The minimum `stellar` CLI major version required by this tool.
+///
+/// DEPLOYMENT.md documents `stellar CLI 26.x+` as a prerequisite.
+const STELLAR_MIN_MAJOR: u64 = 26;
+
+/// Verify that the `stellar` CLI binary is available in `PATH` **and** that
+/// its reported major version meets the documented minimum (`26.x+`).
 ///
 /// This is called once at startup so users get a clear, actionable error
-/// message instead of a cryptic OS-level "program not found" when the binary
-/// is missing.
+/// message instead of a cryptic OS-level "program not found" or an obscure
+/// RPC/argument error deep inside the invoke path.
 ///
-/// Returns `Ok(())` if the binary is found, or `Err(message)` with
-/// installation instructions if it is not.
+/// Returns `Ok(())` if the binary is found and version-compatible, or
+/// `Err(message)` with installation/upgrade instructions otherwise.
 fn validate_environment() -> Result<(), String> {
     use std::process::Command;
 
-    match Command::new(rpc::stellar_bin()).arg("--version").output() {
-        Ok(_) => Ok(()),
-        Err(_) => Err("Error: `stellar` CLI not found in PATH.\n\
+    let output = Command::new(rpc::stellar_bin())
+        .arg("--version")
+        .output()
+        .map_err(|_| {
+            "Error: `stellar` CLI not found in PATH.\n\
              \n\
              Install it with:\n\
              \n\
@@ -127,8 +135,59 @@ fn validate_environment() -> Result<(), String> {
              \thttps://developers.stellar.org/docs/tools/cli/install-cli\n\
              \n\
              After installing, run `stellar --version` to confirm the installation."
-            .to_string()),
+                .to_string()
+        })?;
+
+    // `stellar --version` prints something like "stellar 26.0.0\n" to stdout.
+    // Parse the first version-looking token (digits separated by dots) from
+    // the combined stdout + stderr so we are robust against minor format
+    // changes across releases.
+    let version_output = String::from_utf8_lossy(&output.stdout);
+    let version_output = version_output.trim();
+
+    let detected_major = version_output
+        .split_whitespace()
+        .find_map(|token| {
+            // Take the first token that looks like a semver / version number
+            // (starts with a digit, contains at least one dot).
+            if token.starts_with(|c: char| c.is_ascii_digit()) && token.contains('.') {
+                token
+                    .split('.')
+                    .next()
+                    .and_then(|major| major.parse::<u64>().ok())
+            } else {
+                None
+            }
+        })
+        .ok_or_else(|| {
+            format!(
+                "Error: could not determine the `stellar` CLI version.\n\
+                 \n\
+                 `stellar --version` produced unexpected output: {version_output:?}\n\
+                 \n\
+                 Expected output like `stellar 26.0.0`.  Please ensure you have\n\
+                 stellar CLI {STELLAR_MIN_MAJOR}.x or newer installed:\n\
+                 \n\
+                 \tcargo install --locked stellar-cli --features opt\n\
+                 \thttps://developers.stellar.org/docs/tools/cli/install-cli"
+            )
+        })?;
+
+    if detected_major < STELLAR_MIN_MAJOR {
+        return Err(format!(
+            "Error: `stellar` CLI version {detected_major}.x detected, \
+             but version {STELLAR_MIN_MAJOR}.x or newer is required.\n\
+             \n\
+             Upgrade with:\n\
+             \n\
+             \tcargo install --locked stellar-cli --features opt\n\
+             \n\
+             Or follow the official guide:\n\
+             \thttps://developers.stellar.org/docs/tools/cli/install-cli"
+        ));
     }
+
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -167,6 +226,7 @@ fn main() {
         cli.network,
         cli.rpc_url.clone(),
         cli.network_passphrase.clone(),
+        cli.source_key_file.clone(),
     ) {
         Ok(c) => c,
         Err(msg) => {
