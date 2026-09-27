@@ -6,10 +6,18 @@ import { RPC_URL } from '../../lib/config'
  * Provides deterministic responses for getEvents and getHealth queries.
  */
 
+/** Shape of the JSON-RPC request bodies the Soroban RPC endpoint receives. */
+interface RpcRequestBody {
+  jsonrpc: string
+  id: number | string
+  method: string
+  params?: unknown
+}
+
 export const handlers = [
   // Mock getEvents RPC endpoint
   http.post(RPC_URL, async ({ request }) => {
-    const body = await request.json() as any
+    const body = (await request.json()) as RpcRequestBody
 
     if (body.method === 'getEvents') {
       return HttpResponse.json({

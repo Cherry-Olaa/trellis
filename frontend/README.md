@@ -57,6 +57,20 @@ npm run build
 
 Output is written to `dist/`. Serve it with any static host; see [DEPLOYMENT.md](../DEPLOYMENT.md#frontend-spa-routing) for SPA routing fallback configuration required on nginx/Apache/Netlify/Vercel.
 
+### Lint rules
+
+Oxlint is configured in [`.oxlintrc.json`](./.oxlintrc.json). The `typescript/no-explicit-any` rule is enabled as a **warning** (not an error) so a type-safety regression cannot be merged silently, while leaving room to migrate any remaining untyped code.
+
+Migration path when a warning appears:
+
+1. **Model the shape.** For RPC responses, declare an `interface` with the fields actually read — see `src/test/mocks/handlers.ts` for the `RpcRequestBody` pattern.
+2. **Prefer `unknown` over `any`** for values you only pass through or narrow later; narrow with a type guard or `instanceof` rather than a cast.
+3. **When a type is genuinely external and unmodelled**, use a narrowly-scoped intersection type instead of widening the whole value — see `createAbortSignalFallback` in `src/lib/abort.ts` for the `AbortSignal & { _timeoutId?: ... }` pattern.
+4. **Do not silence the rule with an inline disable** unless the case is unavoidable and commented with why. Once the warning count reaches zero, the rule should be promoted to `error`.
+
+`src/` currently has no `any` usages, so a new one is always a regression rather than pre-existing debt.
+
+
 ## Contributing
 
 See the root [CONTRIBUTING.md](../CONTRIBUTING.md) for repository-wide setup and PR guidelines. For Stellar/Freighter API details, see the [Stellar developer docs](https://developers.stellar.org/) and [Freighter docs](https://docs.freighter.app/).

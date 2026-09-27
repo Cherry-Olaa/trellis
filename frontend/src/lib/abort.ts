@@ -30,8 +30,13 @@ function createAbortSignalFallback(timeoutMs: number): AbortSignal {
     controller.abort()
   }, timeoutMs)
 
-  // Store the timeoutId on the signal so it can be cleaned up if needed
-  const signal = controller.signal as any
+  // Store the timeoutId on the signal so it can be cleaned up if needed.
+  // The `AbortSignal` type has no `_timeoutId` field, so the extra cleanup
+  // handle is carried on a locally-declared intersection type instead of
+  // widening the whole signal to `any`.
+  type AbortSignalWithTimeoutId = AbortSignal & { _timeoutId?: ReturnType<typeof setTimeout> }
+
+  const signal: AbortSignalWithTimeoutId = controller.signal
   signal._timeoutId = timeoutId
 
   return signal
