@@ -3,9 +3,6 @@
 mod errors;
 mod events;
 mod storage;
-// `pub` so the in-crate `contract_bench` target can `use trellis_core::types::…`
-// exactly like an external consumer (and so `Milestone`/`EscrowStatus` are
-// re-exportable to SDK users building against the rlib).
 pub mod types;
 
 #[cfg(test)]
@@ -53,7 +50,7 @@ pub struct TrellisContract;
 //
 // There are no `unwrap()` / `expect()` calls anywhere in the contract crate's
 // non-test sources. The `token::Client` transfer calls can still trap inside
-// the SDK (e.g. insufficient balance/allowance) — that is the token
+// the SDK (e.g. the payer does not hold enough balance) — that is the token
 // contract's own boundary and is intentionally left to it. A custom
 // `#[panic_handler]` is not added: `soroban-sdk` already provides one for the
 // wasm build and a second definition is a duplicate-lang-item error.
@@ -63,10 +60,21 @@ pub struct TrellisContract;
 impl TrellisContract {
     /// Create a new escrow agreement.
     ///
-    /// The payer authorises this call.  Each milestone in `milestones` is
-    /// expected to arrive with `status = EscrowStatus::Pending`; the contract
-    /// does not override per-milestone status on init so the caller controls
-    /// the initial state of each deliverable.
+    /// The payer authorises this call.  Every milestone in `milestones` must
+    /// arrive with `status = EscrowStatus::Pending` — the contract rejects any
+    /// other initial status with
+    /// [`TrellisError::InvalidInitialMilestoneStatus`] rather than silently
+    /// accepting it.
+    ///
+    /// `Pending` is the only valid starting state because it is the sole
+    /// entry point of the state machine: `Funded` is reached by
+    /// `lock_funds`, and every status after that is reached by transitioning
+    /// a funded milestone. All agreements using a given token share one
+    /// pooled contract balance, so a milestone created in a pre-advanced
+    /// state would be a claim on tokens that were never escrowed for it —
+    /// `WorkSubmitted` could go straight to `approve_and_release` and
+    /// `Disputed` straight to `resolve_dispute`, either draining the pool
+    /// without anything having been locked.
     ///
     /// `milestones` must be non-empty and `dispute_resolver` must be distinct
     /// from both `payer` and `payee` — see the `Errors` below.
@@ -76,8 +84,18 @@ impl TrellisContract {
     ///   already exists in storage.
     /// - [`TrellisError::EmptyMilestoneSet`] if `milestones` is empty — such
     ///   an agreement could never transition through any state.
+    /// - [`TrellisError::InvalidInitialMilestoneStatus`] if any milestone's
+    ///   `status` is not `Pending`.
     /// - [`TrellisError::ResolverCannotBeParty`] if `dispute_resolver` equals
     ///   `payer` or `payee` — the resolver must be a neutral third party.
+    /// - [`TrellisError::PayerEqualsPayee`] if `payer == payee`.
+    /// - [`TrellisError::MilestoneCountExceeded`] if more than
+    ///   `MAX_MILESTONES` milestones are supplied.
+    /// - [`TrellisError::InvalidToken`] if `token` is not a live token contract.
+    /// - [`TrellisError::InvalidMilestone`] if any milestone amount is zero
+    ///   or negative.
+    /// - [`TrellisError::TotalAmountOverflow`] if the milestone amounts sum to
+    ///   more than `i128::MAX`.
     pub fn init(
         env: Env,
         agreement_id: BytesN<32>,
@@ -109,11 +127,11 @@ impl TrellisContract {
             return Err(TrellisError::ResolverCannotBeParty);
         }
 
-        // Liveness probe: `try_symbol()` surfaces a host/invoke error for a bad
-        // address and a conversion error for a non-symbol return value. Both
-        // mean "this is not a usable token contract", so both map to
-        // `InvalidToken` instead of reaching an `unwrap`.
-        let _ = token::Client::new(&env, &token)
+        // Liveness probe: the token address must be a live token contract, so
+        // `symbol()` has to succeed. Both failure modes — a host trap from a
+        // non-contract address and a decode failure from a contract that does
+        // not return a symbol — map to `InvalidToken` rather than propagating.
+        token::Client::new(&env, &token)
             .try_symbol()
             .map_err(|_| TrellisError::InvalidToken)?
             .map_err(|_| TrellisError::InvalidToken)?;
@@ -138,8 +156,23 @@ impl TrellisContract {
 
     /// Lock funds for a single milestone into the contract.
     ///
-    /// The payer authorises this call and must have pre-approved the token
-    /// transfer allowance on the token contract.
+    /// The payer authorises this call with `require_auth()`. The contract then
+    /// pulls the tokens itself, via a single
+    /// `token::Client::transfer(payer → this contract)` call — the payer's
+    /// authorization *is* the authorization for that transfer, because the
+    /// token contract sees the transfer as invoked by this contract on the
+    /// payer's behalf and re-checks the payer's signature.
+    ///
+    /// No prior approval or allowance step is involved. There is no
+    /// `approve` / `set_allowance` call anywhere in this crate, so callers
+    /// must **not** pre-approve the escrow contract on the token contract
+    /// before calling this — doing so is unnecessary, and for SAC-style
+    /// tokens there is no allowance to set in the first place. The only
+    /// precondition is that the payer holds at least `milestone.amount` of
+    /// `agreement.token`.
+    ///
+    /// The milestone must be `Pending`; any other status returns
+    /// [`TrellisError::InvalidStateTransition`].
     ///
     /// # Errors
     /// - [`TrellisError::AgreementNotFound`] – unknown agreement ID.
@@ -482,6 +515,14 @@ impl TrellisContract {
     /// The payer authorises this call once and the auth covers all transfers
     /// within the batch.
     ///
+    /// # Empty input
+    /// An empty `milestone_ids` is a no-op that returns `Ok(0)`. No state is
+    /// written, no event is emitted and no token moves. The agreement is still
+    /// read (so an unknown ID returns
+    /// [`TrellisError::AgreementNotFound`]) and the payer's authorisation is
+    /// still required — an empty batch is a well-formed call, not a bypass of
+    /// either check.
+    ///
     /// # Errors
     /// - [`TrellisError::AgreementNotFound`] – unknown agreement ID.
     /// - [`TrellisError::InvalidMilestone`] – any ID in `milestone_ids` is out of range.
@@ -493,6 +534,15 @@ impl TrellisContract {
     ) -> Result<u32, TrellisError> {
         let mut agreement = storage::read_agreement(&env, &agreement_id)?;
         agreement.payer.require_auth();
+
+        // An empty batch funds nothing, so there is no state change to persist.
+        // Returning here skips the `write_agreement` below, which would
+        // otherwise rewrite the agreement byte-for-byte identically — a
+        // redundant persistent write that costs the caller gas and extends the
+        // entry's TTL while changing nothing observable.
+        if milestone_ids.is_empty() {
+            return Ok(0);
+        }
 
         let token = token::Client::new(&env, &agreement.token);
         let mut funded: u32 = 0;
@@ -542,6 +592,22 @@ impl TrellisContract {
     /// Returns `None` if the agreement does not exist or `milestone_id` is out
     /// of range — both map to the same observable absence from the caller's
     /// perspective.
+    ///
+    /// # Return type
+    /// The two `None` cases are deliberately *not* distinguished, and callers
+    /// should not try to. A missing agreement and a missing milestone are both
+    /// "there is no milestone at this position", and splitting them would mean
+    /// either leaking agreement existence through a read-only view or adding an
+    /// error variant that no caller can act on differently.
+    ///
+    /// Callers that need to tell them apart should use
+    /// [`Self::get_agreement`] first: it returns
+    /// [`TrellisError::AgreementNotFound`] for a missing ID, so
+    /// `get_agreement(..).is_err()` disambiguates without any API change here.
+    ///
+    /// Both paths are covered separately in `test.rs`
+    /// (`test_get_milestone_unknown_agreement_returns_none` for the storage miss,
+    /// `test_get_milestone_invalid_id_returns_none` for the vector miss).
     pub fn get_milestone(
         env: Env,
         agreement_id: BytesN<32>,
@@ -582,21 +648,32 @@ impl TrellisContract {
 // Helpers
 // ---------------------------------------------------------------------------
 
-/// Reject non-positive milestone amounts and sum the rest into a total.
+/// Validate incoming milestones and sum their amounts into a total.
 ///
 /// Runs once, in `init`, before the agreement is written to storage — so an
 /// invalid milestone list never consumes storage, and every later reader gets
 /// the sum for free via [`Agreement::total_amount`] instead of iterating
 /// `milestones` on every query.
 ///
+/// Each milestone must be in [`EscrowStatus::Pending`]: it is the sole entry
+/// point of the state machine, and every later status is reached by locking
+/// funds first. Accepting a pre-advanced milestone would let its owner skip
+/// `lock_funds` entirely and then release from the shared contract balance
+/// tokens that were never escrowed for that milestone.
+///
 /// # Errors
 /// Returns [`TrellisError::InvalidMilestone`] on the first milestone whose
 /// `amount` is zero or negative.
+/// Returns [`TrellisError::InvalidInitialMilestoneStatus`] on the first
+/// milestone whose `status` is not `Pending`.
 /// Returns [`TrellisError::TotalAmountOverflow`] if the sum of milestone
 /// amounts exceeds i128::MAX.
 fn validate_milestones(milestones: &Vec<Milestone>) -> Result<i128, TrellisError> {
     let mut total: i128 = 0;
     for m in milestones.iter() {
+        if m.status != EscrowStatus::Pending {
+            return Err(TrellisError::InvalidInitialMilestoneStatus);
+        }
         if m.amount <= 0 {
             return Err(TrellisError::InvalidMilestone);
         }

@@ -27,7 +27,11 @@ describe('WalletProvider', () => {
   })
 
   it('provides wallet context values', () => {
-    let contextValue: any = null
+    // `WalletContextValue` is not exported from the module, so the context
+    // shape is recovered from the public `useWallet` hook return type. The
+    // definite-assignment assertion keeps the test readable: the value is
+    // always written by `TestComponent` before each assertion reads it.
+    let contextValue!: ReturnType<typeof useWallet>
 
     function TestComponent() {
       contextValue = useWallet()
@@ -85,7 +89,11 @@ describe('WalletProvider', () => {
   })
 
   it('initializes with detecting status', () => {
-    let contextValue: any = null
+    // `WalletContextValue` is not exported from the module, so the context
+    // shape is recovered from the public `useWallet` hook return type. The
+    // definite-assignment assertion keeps the test readable: the value is
+    // always written by `TestComponent` before each assertion reads it.
+    let contextValue!: ReturnType<typeof useWallet>
 
     function TestComponent() {
       contextValue = useWallet()
@@ -102,7 +110,11 @@ describe('WalletProvider', () => {
   })
 
   it('handles disconnection gracefully', async () => {
-    let contextValue: any = null
+    // `WalletContextValue` is not exported from the module, so the context
+    // shape is recovered from the public `useWallet` hook return type. The
+    // definite-assignment assertion keeps the test readable: the value is
+    // always written by `TestComponent` before each assertion reads it.
+    let contextValue!: ReturnType<typeof useWallet>
 
     function TestComponent() {
       contextValue = useWallet()
@@ -123,7 +135,11 @@ describe('WalletProvider', () => {
   })
 
   it('clears errors with clearError function', async () => {
-    let contextValue: any = null
+    // `WalletContextValue` is not exported from the module, so the context
+    // shape is recovered from the public `useWallet` hook return type. The
+    // definite-assignment assertion keeps the test readable: the value is
+    // always written by `TestComponent` before each assertion reads it.
+    let contextValue!: ReturnType<typeof useWallet>
 
     function TestComponent() {
       contextValue = useWallet()

@@ -157,16 +157,14 @@ fn unknown_agreement_id_never_panics() {
         client.try_extend_agreement_ttl(&missing, &payer),
         Err(Ok(TrellisError::AgreementNotFound))
     );
-    // Non-`()` success types can't derive PartialEq, so match instead of eq.
-    assert!(matches!(
+    // `Agreement` derives `PartialEq`, so the full `Result` can be compared
+    // directly — no field-by-field unpacking needed.
+    assert_eq!(
         client.try_get_agreement(&missing),
         Err(Ok(TrellisError::AgreementNotFound))
-    ));
+    );
     // Option-returning view: absence, not a trap.
-    assert!(matches!(
-        client.try_get_milestone(&missing, &0),
-        Ok(Ok(None))
-    ));
+    assert_eq!(client.try_get_milestone(&missing, &0), Ok(Ok(None)));
 }
 
 #[test]

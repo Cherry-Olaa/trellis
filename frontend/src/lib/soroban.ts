@@ -136,20 +136,23 @@ function bytesToHex(bytes: Uint8Array): string {
     .join('');
 }
 
-/** Encodes one milestone as the XDR map the contract's `Milestone` struct expects. */
-export function milestoneToScVal(m: { id: number; amount: string; status: EscrowStatus; proof_uri?: string | null }): xdr.ScVal {
+/**
+ * Encodes one milestone as the XDR map the contract's `Milestone` struct
+ * expects: exactly `{ amount: i128, proof_uri: Option<String>, status: EscrowStatus }`,
+ * keys in sorted order. The struct has no `id` (a milestone's id is its index
+ * in the vector) and no description, so neither may appear as a map key or the
+ * contract fails to deserialize the argument. `Option::None` is `Void`;
+ * `Some(uri)` is the bare string.
+ */
+export function milestoneToScVal(m: { amount: bigint | string; status: EscrowStatus; proof_uri?: string | null }): xdr.ScVal {
   return xdr.ScVal.scvMap([
     new xdr.ScMapEntry({
       key: xdr.ScVal.scvSymbol('amount'),
       val: nativeToScVal(BigInt(m.amount), { type: 'i128' }),
     }),
     new xdr.ScMapEntry({
-      key: xdr.ScVal.scvSymbol('id'),
-      val: nativeToScVal(m.id, { type: 'u32' }),
-    }),
-    new xdr.ScMapEntry({
       key: xdr.ScVal.scvSymbol('proof_uri'),
-      val: m.proof_uri ? xdr.ScVal.scvVec([nativeToScVal(m.proof_uri, { type: 'string' })]) : xdr.ScVal.scvVoid(),
+      val: m.proof_uri ? nativeToScVal(m.proof_uri, { type: 'string' }) : xdr.ScVal.scvVoid(),
     }),
     new xdr.ScMapEntry({
       key: xdr.ScVal.scvSymbol('status'),
