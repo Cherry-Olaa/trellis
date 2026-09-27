@@ -225,6 +225,81 @@ fn test_missing_required_env_vars() {
 }
 
 // ---------------------------------------------------------------------------
+// #406: --dry-run must not require the stellar binary
+// ---------------------------------------------------------------------------
+
+/// Confirms that `--dry-run` prints a command preview and exits 0 even when
+/// the `stellar` binary is completely absent from PATH.
+///
+/// This is the core regression test for issue #406: `validate_environment()`
+/// must be skipped for dry-run invocations.
+#[test]
+fn test_dry_run_works_without_stellar_binary() {
+    let output = Command::new("cargo")
+        .args([
+            "run", "--quiet", "--",
+            "lock",
+            "--agreement-id", "0000000000000000000000000000000000000000000000000000000000000001",
+            "--milestone-id", "0",
+            "--dry-run",
+        ])
+        // Wipe PATH so the stellar binary genuinely cannot be found.
+        .env("PATH", "")
+        .env("TRELLIS_CONTRACT_ID", "CBCDEFGHIJKLMNOPQRSTUVWXYZ234567ABCDEFGHIJKLMNOPQRSTUVWXYZ")
+        .env("TRELLIS_SOURCE_KEY", "SBCDEFGHIJKLMNOPQRSTUVWXYZ234567ABCDEFGHIJKLMNOPQRSTUVWXYZ")
+        .current_dir(env::var("CARGO_MANIFEST_DIR").unwrap())
+        .output()
+        .expect("failed to spawn trellis process");
+
+    assert!(
+        output.status.success(),
+        "--dry-run should succeed even when stellar is not in PATH\nstderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("stellar") || stdout.contains("contract") || stdout.contains("invoke"),
+        "--dry-run output should contain a stellar command preview\nstdout: {}",
+        stdout
+    );
+}
+
+/// Adjacent regression test: without `--dry-run`, the binary check must still
+/// fire and produce a clear error message when stellar is absent from PATH.
+///
+/// This guards against accidentally removing the check for non-dry-run paths
+/// while fixing #406.
+#[test]
+fn test_non_dry_run_still_requires_stellar_binary() {
+    let output = Command::new("cargo")
+        .args([
+            "run", "--quiet", "--",
+            "status",
+            "--agreement-id", "0000000000000000000000000000000000000000000000000000000000000001",
+        ])
+        // Wipe PATH so the stellar binary cannot be found.
+        .env("PATH", "")
+        .env("TRELLIS_CONTRACT_ID", "CBCDEFGHIJKLMNOPQRSTUVWXYZ234567ABCDEFGHIJKLMNOPQRSTUVWXYZ")
+        .env("TRELLIS_SOURCE_KEY", "SBCDEFGHIJKLMNOPQRSTUVWXYZ234567ABCDEFGHIJKLMNOPQRSTUVWXYZ")
+        .current_dir(env::var("CARGO_MANIFEST_DIR").unwrap())
+        .output()
+        .expect("failed to spawn trellis process");
+
+    assert!(
+        !output.status.success(),
+        "non-dry-run should fail when stellar is not in PATH"
+    );
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("stellar") || stderr.contains("not found") || stderr.contains("install"),
+        "error message should mention the missing stellar binary\nstderr: {}",
+        stderr
+    );
+}
+
+// ---------------------------------------------------------------------------
 // Command-specific tests
 // ---------------------------------------------------------------------------
 
