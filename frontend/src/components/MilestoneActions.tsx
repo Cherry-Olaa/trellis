@@ -1,5 +1,5 @@
 import { useRef, useState } from 'react'
-import { nativeToScVal } from '@stellar/stellar-sdk'
+import { nativeToScVal, xdr } from '@stellar/stellar-sdk'
 import { useContractInvoke } from '../hooks/useContractInvoke'
 import { useWallet } from '../context/WalletContext'
 import { useToastActions } from '../hooks/useToast'
@@ -11,6 +11,16 @@ interface MilestoneActionsProps {
   milestone: Milestone
   agreement: Agreement
   onSuccess?: () => void
+}
+
+/**
+ * Encodes `proof_uri` for the contract's `Option<String>` parameter.
+ * A blank input means "no proof link" and maps to None (ScVal void), never
+ * to an empty string.
+ */
+export function proofUriToScVal(proofUri: string): xdr.ScVal {
+  const trimmed = proofUri.trim()
+  return trimmed ? nativeToScVal(trimmed, { type: 'string' }) : xdr.ScVal.scvVoid()
 }
 
 const MAX_RETRIES = 3
@@ -54,7 +64,7 @@ export default function MilestoneActions({ milestone, agreement, onSuccess }: Mi
   }
 
   const handleSubmitWork = async (fee?: string) => {
-    if (!wallet.publicKey || !proofUri.trim()) return
+    if (!wallet.publicKey) return
 
     pendingAction.current = 'submit_work'
     try {
@@ -63,7 +73,7 @@ export default function MilestoneActions({ milestone, agreement, onSuccess }: Mi
         nativeToScVal(wallet.publicKey, { type: 'address' }),
         nativeToScVal(idBytes, { type: 'bytes' }),
         nativeToScVal(milestone.id, { type: 'u32' }),
-        nativeToScVal(proofUri, { type: 'string' }),
+        proofUriToScVal(proofUri),
       ]
 
       await invoke('submit_work', args, wallet.publicKey, fee)
@@ -209,7 +219,7 @@ export default function MilestoneActions({ milestone, agreement, onSuccess }: Mi
         <div className="space-y-2 p-3 bg-navy-700 dark:bg-navy-700 light:bg-gray-100 rounded">
           <input
             type="text"
-            placeholder="Proof URI (e.g., GitHub PR, IPFS link)"
+            placeholder="Proof URI (optional, e.g., GitHub PR, IPFS link)"
             value={proofUri}
             onChange={(e) => setProofUri(e.target.value)}
             className="w-full px-3 py-2 bg-navy-800 dark:bg-navy-800 light:bg-white border border-navy-600 dark:border-navy-600 light:border-gray-300 text-white dark:text-white light:text-gray-900 text-sm rounded focus:outline-none focus:border-cyan-400"
@@ -217,7 +227,7 @@ export default function MilestoneActions({ milestone, agreement, onSuccess }: Mi
           <div className="flex gap-2">
             <button
               onClick={handleSubmitWork}
-              disabled={!proofUri.trim() || isLoading}
+              disabled={isLoading}
               className="px-3 py-1 bg-emerald-500 hover:bg-emerald-400 text-white dark:text-white light:text-gray-900 text-xs rounded disabled:opacity-50"
             >
               {isLoading ? 'Submitting...' : 'Submit'}
