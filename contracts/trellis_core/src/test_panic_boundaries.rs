@@ -72,9 +72,8 @@ fn setup() -> (
 /// Build a `Vec<Milestone>` of `n` Pending milestones worth 1_000 each.
 fn pending_milestones(env: &Env, n: u32) -> Vec<Milestone> {
     let mut v: Vec<Milestone> = Vec::new(env);
-    for i in 0..n {
+    for _ in 0..n {
         v.push_back(Milestone {
-            id: i,
             amount: 1_000,
             status: EscrowStatus::Pending,
             proof_uri: None,
@@ -87,9 +86,8 @@ fn pending_milestones(env: &Env, n: u32) -> Vec<Milestone> {
 /// cases that need zero / negative values).
 fn milestones_from_amounts(env: &Env, amounts: &[i128]) -> Vec<Milestone> {
     let mut v: Vec<Milestone> = Vec::new(env);
-    for (i, &amount) in amounts.iter().enumerate() {
+    for &amount in amounts.iter() {
         v.push_back(Milestone {
-            id: i as u32,
             amount,
             status: EscrowStatus::Pending,
             proof_uri: None,
@@ -127,7 +125,7 @@ fn init_agreement(
 
 #[test]
 fn unknown_agreement_id_never_panics() {
-    let (env, _payer, payee, _resolver, _token, client) = setup();
+    let (env, payer, payee, _resolver, _token, client) = setup();
     let missing = agreement_id(&env, 200);
 
     // Every entrypoint that reads an agreement must surface AgreementNotFound.
@@ -156,19 +154,17 @@ fn unknown_agreement_id_never_panics() {
         Err(Ok(TrellisError::AgreementNotFound))
     );
     assert_eq!(
-        client.try_extend_agreement_ttl(&missing),
+        client.try_extend_agreement_ttl(&missing, &payer),
         Err(Ok(TrellisError::AgreementNotFound))
     );
-    // Non-`()` success types can't derive PartialEq, so match instead of eq.
-    assert!(matches!(
+    // `Agreement` derives `PartialEq`, so the full `Result` can be compared
+    // directly — no field-by-field unpacking needed.
+    assert_eq!(
         client.try_get_agreement(&missing),
         Err(Ok(TrellisError::AgreementNotFound))
-    ));
+    );
     // Option-returning view: absence, not a trap.
-    assert!(matches!(
-        client.try_get_milestone(&missing, &0),
-        Ok(Ok(None))
-    ));
+    assert_eq!(client.try_get_milestone(&missing, &0), Ok(Ok(None)));
 }
 
 #[test]
@@ -372,7 +368,7 @@ proptest! {
         seed in any::<u8>(),
         milestone_id in any::<u32>(),
     ) {
-        let (env, _payer, payee, _resolver, _token, client) = setup();
+        let (env, payer, payee, _resolver, _token, client) = setup();
         let id = agreement_id(&env, seed);
 
         assert_no_trap!(client.try_lock_funds(&id, &milestone_id), "lock_funds");
@@ -383,7 +379,7 @@ proptest! {
         assert_no_trap!(client.try_cancel_unfunded_milestone(&id, &milestone_id), "cancel");
         assert_no_trap!(client.try_get_agreement(&id), "get_agreement");
         assert_no_trap!(client.try_get_milestone(&id, &milestone_id), "get_milestone");
-        assert_no_trap!(client.try_extend_agreement_ttl(&id), "extend_agreement_ttl");
+        assert_no_trap!(client.try_extend_agreement_ttl(&id, &payer), "extend_agreement_ttl");
     }
 
     /// A random proof URI of arbitrary length / content must not trap

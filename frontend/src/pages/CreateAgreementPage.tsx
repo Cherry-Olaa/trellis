@@ -1,13 +1,15 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { nativeToScVal, StrKey } from '@stellar/stellar-sdk'
+import { nativeToScVal, StrKey, xdr } from '@stellar/stellar-sdk'
 import { useContractInvoke } from '../hooks/useContractInvoke'
 import { useWallet } from '../context/WalletContext'
 import { useToastActions } from '../hooks/useToast'
 import MilestoneBuilder, { type MilestoneInput } from '../components/MilestoneBuilder'
 import { AgreementIdGenerator } from '../components/AgreementIdGenerator'
+import { agreementIdToScVal, milestoneToScVal } from '../lib/soroban'
+import { generateAgreementId } from '../lib/agreementId'
 
-interface FormData {
+export interface FormData {
   payer: string
   payee: string
   resolver: string
@@ -53,6 +55,37 @@ export function amountToStroops(amount: string): bigint {
   // Pad fractional part to exactly 7 digits.
   const paddedFrac = fracPart.padEnd(DECIMALS, '0')
   return BigInt(intPart + paddedFrac)
+}
+
+/**
+ * Builds the argument list for the contract's `init` entrypoint, in its exact
+ * signature order: (agreement_id, payer, payee, token, milestones, dispute_resolver).
+ *
+ * Each milestone is encoded as the on-chain `Milestone` struct — `amount` in
+ * stroops, `status: Pending`, `proof_uri: None`. The description is local-only
+ * metadata with no on-chain field, so it is not sent.
+ */
+export function buildInitArgs(
+  agreementId: string,
+  formData: FormData,
+  milestones: MilestoneInput[],
+): xdr.ScVal[] {
+  const milestoneScVals = milestones.map((m) =>
+    milestoneToScVal({
+      amount: amountToStroops(m.amount), // Convert to stroops (7 decimals) without float imprecision
+      status: 'Pending',
+      proof_uri: null,
+    })
+  )
+
+  return [
+    agreementIdToScVal(agreementId),
+    nativeToScVal(formData.payer.trim(), { type: 'address' }),
+    nativeToScVal(formData.payee.trim(), { type: 'address' }),
+    nativeToScVal(formData.token.trim(), { type: 'address' }),
+    xdr.ScVal.scvVec(milestoneScVals),
+    nativeToScVal(formData.resolver.trim(), { type: 'address' }),
+  ]
 }
 
 function CreateAgreementPage() {
@@ -140,30 +173,14 @@ function CreateAgreementPage() {
     setIsSubmitting(true)
 
     try {
-      // Build milestone ScVals
-      const milestoneScVals = milestones.map((m) =>
-        nativeToScVal({
-          amount: amountToStroops(m.amount), // Convert to stroops (7 decimals) without float imprecision
-          description: m.description || '',
-        })
-      )
+      // Fall back to a fresh ID if the user never clicked "Generate".
+      const id = agreementId || generateAgreementId()
+      const txHash = await invoke('init', buildInitArgs(id, formData, milestones), wallet.publicKey)
 
-      const args = [
-        nativeToScVal(formData.payer, { type: 'address' }),
-        nativeToScVal(formData.payee, { type: 'address' }),
-        nativeToScVal(formData.token, { type: 'address' }),
-        nativeToScVal(formData.resolver, { type: 'address' }),
-        nativeToScVal(milestoneScVals, { type: 'vec' }),
-      ]
-
-      const txHash = await invoke('init', args, wallet.publicKey)
-      
       toast.success({ title: 'Agreement created!', message: `Transaction: ${txHash.slice(0, 8)}...` })
 
-      // Navigate to status page with the new agreement ID
-      // Note: In production, you'd extract the agreement ID from the transaction result
       setTimeout(() => {
-        navigate('/status')
+        navigate(`/agreement/${id}`)
       }, 1500)
     } catch (err) {
       console.error('Failed to create agreement:', err)

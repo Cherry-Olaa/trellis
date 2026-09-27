@@ -3,7 +3,7 @@ import { RPC_URL } from '../../lib/config'
 
 /**
  * Mock handlers for Soroban RPC endpoints used in tests.
- * Provides deterministic responses for getEvents queries.
+ * Provides deterministic responses for getEvents and getHealth queries.
  */
 
 export const handlers = [
@@ -47,6 +47,19 @@ export const handlers = [
             },
           ],
           latestLedger: 1001,
+        },
+      })
+    }
+
+    if (body.method === 'getHealth') {
+      return HttpResponse.json({
+        jsonrpc: '2.0',
+        id: body.id,
+        result: {
+          status: 'healthy',
+          latestLedger: 1001,
+          oldestLedger: 1,
+          ledgerRetentionWindow: 17280,
         },
       })
     }
