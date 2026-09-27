@@ -1,6 +1,7 @@
 import { useNavigate, Link } from 'react-router-dom'
 import { useTypingAnimation } from '../hooks/useTypingAnimation'
 import { HowItWorks } from '../components/HowItWorks'
+import { StatsBar } from '../components/StatsBar'
 import { useToastActions } from '../hooks/useToast'
 
 /**
@@ -12,6 +13,7 @@ import { useToastActions } from '../hooks/useToast'
  *   states so they never appear decorative (#96).
  * - HowItWorks section is extracted to its own component with separate SVG
  *   icon files (#95).
+ * - StatsBar shows live contract activity counts from useContractStats (#429).
  */
 export default function HomePage() {
   const navigate = useNavigate()
@@ -93,6 +95,11 @@ export default function HomePage() {
             >
               Check Status
             </button>
+          </div>
+
+          {/* Live contract activity (#429) */}
+          <div className="mt-16 w-full flex justify-center">
+            <StatsBar />
           </div>
 
           {/* Features Section */}

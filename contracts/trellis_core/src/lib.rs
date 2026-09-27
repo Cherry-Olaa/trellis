@@ -487,6 +487,14 @@ impl TrellisContract {
     /// The payer authorises this call once and the auth covers all transfers
     /// within the batch.
     ///
+    /// # Empty input
+    /// An empty `milestone_ids` is a no-op that returns `Ok(0)`. No state is
+    /// written, no event is emitted and no token moves. The agreement is still
+    /// read (so an unknown ID returns
+    /// [`TrellisError::AgreementNotFound`]) and the payer's authorisation is
+    /// still required — an empty batch is a well-formed call, not a bypass of
+    /// either check.
+    ///
     /// # Errors
     /// - [`TrellisError::AgreementNotFound`] – unknown agreement ID.
     /// - [`TrellisError::InvalidMilestone`] – any ID in `milestone_ids` is out of range.
@@ -498,6 +506,15 @@ impl TrellisContract {
     ) -> Result<u32, TrellisError> {
         let mut agreement = storage::read_agreement(&env, &agreement_id)?;
         agreement.payer.require_auth();
+
+        // An empty batch funds nothing, so there is no state change to persist.
+        // Returning here skips the `write_agreement` below, which would
+        // otherwise rewrite the agreement byte-for-byte identically — a
+        // redundant persistent write that costs the caller gas and extends the
+        // entry's TTL while changing nothing observable.
+        if milestone_ids.is_empty() {
+            return Ok(0);
+        }
 
         let token = token::Client::new(&env, &agreement.token);
         let mut funded: u32 = 0;
@@ -547,6 +564,22 @@ impl TrellisContract {
     /// Returns `None` if the agreement does not exist or `milestone_id` is out
     /// of range — both map to the same observable absence from the caller's
     /// perspective.
+    ///
+    /// # Return type
+    /// The two `None` cases are deliberately *not* distinguished, and callers
+    /// should not try to. A missing agreement and a missing milestone are both
+    /// "there is no milestone at this position", and splitting them would mean
+    /// either leaking agreement existence through a read-only view or adding an
+    /// error variant that no caller can act on differently.
+    ///
+    /// Callers that need to tell them apart should use
+    /// [`Self::get_agreement`] first: it returns
+    /// [`TrellisError::AgreementNotFound`] for a missing ID, so
+    /// `get_agreement(..).is_err()` disambiguates without any API change here.
+    ///
+    /// Both paths are covered separately in `test.rs`
+    /// (`test_get_milestone_unknown_agreement_returns_none` for the storage miss,
+    /// `test_get_milestone_invalid_id_returns_none` for the vector miss).
     pub fn get_milestone(
         env: Env,
         agreement_id: BytesN<32>,
