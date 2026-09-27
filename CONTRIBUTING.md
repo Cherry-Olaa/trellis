@@ -286,7 +286,32 @@ git checkout -b docs/contributing-guide
 git checkout -b test/live-status-command
 ```
 
-## 11. PR Requirements
+## 11. Review Ownership and CODEOWNERS
+
+The repository uses a [CODEOWNERS](.github/CODEOWNERS) file so that pull requests are automatically routed to the maintainers responsible for the code you touched. Review requests are issued when the PR is opened and re-evaluated on every push.
+
+| Area | Pattern | Owners |
+| --- | --- | --- |
+| Everything else (default fallback) | `*` | @ALLEN-AYODEJI |
+| Smart contracts | `/contracts/`, root `Cargo.toml`, `Cargo.lock`, `rust-toolchain.toml` | @ALLEN-AYODEJI |
+| CLI | `/cli/` | @ALLEN-AYODEJI |
+| Frontend | `/frontend/` | @ALLEN-AYODEJI, @Folex1275 |
+| Scripts and tooling | `/scripts/`, `/Makefile` | @ALLEN-AYODEJI |
+| CI and GitHub configuration | `/.github/` | @ALLEN-AYODEJI, @Oryke, @Felamsy |
+| Root documentation | `/*.md` | @ALLEN-AYODEJI |
+
+How matching works:
+
+- A PR that touches files in several areas requests a review from the owners of every matching area. A PR changing both `contracts/trellis_core/src/lib.rs` and `frontend/src/App.tsx` is assigned to the contract owner and the frontend owner.
+- When several patterns match the same file, the last matching rule in the file wins. Specific rules are therefore listed after broader ones.
+- CODEOWNERS only *requests* reviews. Whether an owner's approval is mandatory is controlled by branch protection ("Require review from Code Owners") on the default branch.
+
+Rules for changing ownership:
+
+- Owners must have write access to this repository. A username or team without access is silently ignored by GitHub, and no review request is sent.
+- To become an owner for an area, or to change an assignment, open an issue describing your experience with that area. Do not edit `.github/CODEOWNERS` directly without agreement.
+
+## 12. PR Requirements
 
 All of the following must be true before requesting review:
 
@@ -297,7 +322,7 @@ All of the following must be true before requesting review:
 - No files outside the linked issue's scope are changed.
 - No changes are made to `contracts/trellis_core` unless the issue explicitly requires contract changes.
 - No new dependencies are added without prior discussion in the issue thread.
-- **If you changed contract code**: regenerate test snapshots and commit them (see [Test Snapshots](#test-snapshots) below).
+- **If you changed contract code**: regenerate test snapshots and commit them (see [Test Snapshots](#13-test-snapshots) below).
 
 Suggested final checks from the workspace root:
 
@@ -322,7 +347,7 @@ cargo build --release
 cd ../..
 ```
 
-## 12. Test Snapshots
+## 13. Test Snapshots
 
 The Soroban test framework records ledger state at each test step into JSON files under `contracts/trellis_core/test_snapshots/`. These files are committed to the repository so reviewers can see exactly what state the contract produces for every test case.
 
@@ -368,7 +393,7 @@ If any snapshot file differs from what is committed, the build fails with an err
 - If you add a new test, its snapshot file will be created by `make test-snapshots-update` and must be committed.
 - If you delete a test, delete its snapshot file from the repository in the same PR.
 
-## 13. Code Style
+## 14. Code Style
 
 Follow the existing patterns in the file you edit. Do not introduce a new style in the same PR.
 
@@ -387,7 +412,7 @@ Before committing Rust changes, format them:
 cargo fmt
 ```
 
-## 14. Frontend Versioning
+## 15. Frontend Versioning
 
 The frontend (`frontend/package.json`) follows [Semantic Versioning](https://semver.org/):
 
@@ -404,7 +429,7 @@ npm version patch   # or minor / major
 
 This updates `package.json` and creates a matching git tag. The version is injected into the build via `vite.config.ts` (`__APP_VERSION__`, sourced from `npm_package_version`) and rendered in the app footer, so every deployed build is traceable to a version.
 
-## 15. Frontend Tests and Manual Testnet Verification
+## 16. Frontend Tests and Manual Testnet Verification
 
 Run the frontend checks before opening a PR that touches `frontend/`:
 
@@ -423,7 +448,7 @@ For changes that affect contract calls or wallet flows, also verify manually aga
 2. Run `npm run dev` and exercise the affected flow end to end (e.g. init, fund, submit, approve/dispute) using a Freighter Testnet account.
 3. Confirm the transaction succeeds in Freighter and the resulting state is reflected in the UI.
 
-## 16. Getting Help
+## 17. Getting Help
 
 Use the right channel for the question:
 
