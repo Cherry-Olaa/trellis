@@ -5,6 +5,11 @@ edition = "2021"
 license = "MIT"
 publish = false
 
+# `cdylib` is the artifact that gets deployed to Soroban; `rlib` lets the
+# in-crate `[[bench]]` target `use trellis_core::…` the same way an external
+# consumer does (without it `cargo clippy --all-targets` fails to link the
+# bench). Both are emitted, so `make build-contract` still produces
+# `trellis_core.wasm`.
 [lib]
 # `rlib` is required so the `contract_bench` benchmark target can link against
 # the contract crate; `cdylib` is what the wasm deployment artefact is built
