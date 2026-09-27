@@ -50,7 +50,7 @@ pub struct TrellisContract;
 //
 // There are no `unwrap()` / `expect()` calls anywhere in the contract crate's
 // non-test sources. The `token::Client` transfer calls can still trap inside
-// the SDK (e.g. insufficient balance/allowance) — that is the token
+// the SDK (e.g. the payer does not hold enough balance) — that is the token
 // contract's own boundary and is intentionally left to it. A custom
 // `#[panic_handler]` is not added: `soroban-sdk` already provides one for the
 // wasm build and a second definition is a duplicate-lang-item error.
@@ -60,10 +60,21 @@ pub struct TrellisContract;
 impl TrellisContract {
     /// Create a new escrow agreement.
     ///
-    /// The payer authorises this call.  Each milestone in `milestones` is
-    /// expected to arrive with `status = EscrowStatus::Pending`; the contract
-    /// does not override per-milestone status on init so the caller controls
-    /// the initial state of each deliverable.
+    /// The payer authorises this call.  Every milestone in `milestones` must
+    /// arrive with `status = EscrowStatus::Pending` — the contract rejects any
+    /// other initial status with
+    /// [`TrellisError::InvalidInitialMilestoneStatus`] rather than silently
+    /// accepting it.
+    ///
+    /// `Pending` is the only valid starting state because it is the sole
+    /// entry point of the state machine: `Funded` is reached by
+    /// `lock_funds`, and every status after that is reached by transitioning
+    /// a funded milestone. All agreements using a given token share one
+    /// pooled contract balance, so a milestone created in a pre-advanced
+    /// state would be a claim on tokens that were never escrowed for it —
+    /// `WorkSubmitted` could go straight to `approve_and_release` and
+    /// `Disputed` straight to `resolve_dispute`, either draining the pool
+    /// without anything having been locked.
     ///
     /// `milestones` must be non-empty and `dispute_resolver` must be distinct
     /// from both `payer` and `payee` — see the `Errors` below.
@@ -73,6 +84,8 @@ impl TrellisContract {
     ///   already exists in storage.
     /// - [`TrellisError::EmptyMilestoneSet`] if `milestones` is empty — such
     ///   an agreement could never transition through any state.
+    /// - [`TrellisError::InvalidInitialMilestoneStatus`] if any milestone's
+    ///   `status` is not `Pending`.
     /// - [`TrellisError::ResolverCannotBeParty`] if `dispute_resolver` equals
     ///   `payer` or `payee` — the resolver must be a neutral third party.
     /// - [`TrellisError::PayerEqualsPayee`] if `payer == payee`.
@@ -143,8 +156,23 @@ impl TrellisContract {
 
     /// Lock funds for a single milestone into the contract.
     ///
-    /// The payer authorises this call and must have pre-approved the token
-    /// transfer allowance on the token contract.
+    /// The payer authorises this call with `require_auth()`. The contract then
+    /// pulls the tokens itself, via a single
+    /// `token::Client::transfer(payer → this contract)` call — the payer's
+    /// authorization *is* the authorization for that transfer, because the
+    /// token contract sees the transfer as invoked by this contract on the
+    /// payer's behalf and re-checks the payer's signature.
+    ///
+    /// No prior approval or allowance step is involved. There is no
+    /// `approve` / `set_allowance` call anywhere in this crate, so callers
+    /// must **not** pre-approve the escrow contract on the token contract
+    /// before calling this — doing so is unnecessary, and for SAC-style
+    /// tokens there is no allowance to set in the first place. The only
+    /// precondition is that the payer holds at least `milestone.amount` of
+    /// `agreement.token`.
+    ///
+    /// The milestone must be `Pending`; any other status returns
+    /// [`TrellisError::InvalidStateTransition`].
     ///
     /// # Errors
     /// - [`TrellisError::AgreementNotFound`] – unknown agreement ID.
@@ -620,21 +648,32 @@ impl TrellisContract {
 // Helpers
 // ---------------------------------------------------------------------------
 
-/// Reject non-positive milestone amounts and sum the rest into a total.
+/// Validate incoming milestones and sum their amounts into a total.
 ///
 /// Runs once, in `init`, before the agreement is written to storage — so an
 /// invalid milestone list never consumes storage, and every later reader gets
 /// the sum for free via [`Agreement::total_amount`] instead of iterating
 /// `milestones` on every query.
 ///
+/// Each milestone must be in [`EscrowStatus::Pending`]: it is the sole entry
+/// point of the state machine, and every later status is reached by locking
+/// funds first. Accepting a pre-advanced milestone would let its owner skip
+/// `lock_funds` entirely and then release from the shared contract balance
+/// tokens that were never escrowed for that milestone.
+///
 /// # Errors
 /// Returns [`TrellisError::InvalidMilestone`] on the first milestone whose
 /// `amount` is zero or negative.
+/// Returns [`TrellisError::InvalidInitialMilestoneStatus`] on the first
+/// milestone whose `status` is not `Pending`.
 /// Returns [`TrellisError::TotalAmountOverflow`] if the sum of milestone
 /// amounts exceeds i128::MAX.
 fn validate_milestones(milestones: &Vec<Milestone>) -> Result<i128, TrellisError> {
     let mut total: i128 = 0;
     for m in milestones.iter() {
+        if m.status != EscrowStatus::Pending {
+            return Err(TrellisError::InvalidInitialMilestoneStatus);
+        }
         if m.amount <= 0 {
             return Err(TrellisError::InvalidMilestone);
         }

@@ -44,3 +44,65 @@ pub fn validate_stellar_address(addr: &str) -> Result<(), String> {
         ),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn is_valid_hex_empty_string() {
+        assert!(is_valid_hex("", 0));
+        assert!(!is_valid_hex("", 1));
+        assert!(!is_valid_hex("a", 0));
+    }
+
+    #[test]
+    fn is_valid_hex_odd_length_is_length_checked_only() {
+        // The function checks exact length, not byte alignment: an odd
+        // length is accepted when it is the requested length.
+        assert!(is_valid_hex("abc", 3));
+        assert!(!is_valid_hex("abc", 4));
+        assert!(!is_valid_hex("abcd", 3));
+    }
+
+    #[test]
+    fn is_valid_hex_boundary_lengths() {
+        let s = "a".repeat(32);
+        assert!(is_valid_hex(&s, 32));
+        assert!(!is_valid_hex(&s[..31], 32));
+        assert!(!is_valid_hex(&format!("{s}a"), 32));
+    }
+
+    #[test]
+    fn is_valid_hex_rejects_non_hex_characters() {
+        assert!(!is_valid_hex("abcg", 4));
+        assert!(!is_valid_hex("0x12", 4));
+        assert!(!is_valid_hex("12 4", 4));
+        assert!(!is_valid_hex("12-4", 4));
+    }
+
+    #[test]
+    fn is_valid_hex_accepts_upper_lower_and_mixed_case() {
+        assert!(is_valid_hex("abcdef", 6));
+        assert!(is_valid_hex("ABCDEF", 6));
+        assert!(is_valid_hex("aBcDeF0123456789", 16));
+    }
+
+    #[test]
+    fn is_valid_hex_rejects_unicode_lookalike_digits() {
+        // Fullwidth "０１" (U+FF10, U+FF11) and Arabic-Indic "٠١"
+        // (U+0660, U+0661) are Unicode digits but not ASCII hex.
+        assert!(!is_valid_hex("０１", "０１".len()));
+        assert!(!is_valid_hex("٠١", "٠١".len()));
+        // Fullwidth Latin "Ａ" (U+FF21) looks like hex A.
+        assert!(!is_valid_hex("Ａ", "Ａ".len()));
+    }
+
+    #[test]
+    fn is_valid_hex_length_is_in_bytes_not_chars() {
+        // "é" is one char but two bytes: it must not pass as 2 hex chars,
+        // nor slip through a length match on char count.
+        assert!(!is_valid_hex("é", 2));
+        assert!(!is_valid_hex("é", 1));
+    }
+}

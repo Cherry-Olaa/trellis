@@ -1,3 +1,5 @@
+use std::io::IsTerminal as _;
+
 use clap::Subcommand;
 use clap_complete::Shell;
 
@@ -19,6 +21,17 @@ const ANSI_RED: &str = "\x1b[31m";
 const ANSI_BOLD: &str = "\x1b[1m";
 /// ANSI SGR: reset all attributes.
 const ANSI_RESET: &str = "\x1b[0m";
+
+/// Returns `true` when ANSI color output is appropriate.
+///
+/// Colors are suppressed when either of these conditions holds:
+/// - The `NO_COLOR` environment variable is present (any value), per
+///   <https://no-color.org/>.
+/// - stdout is not connected to a terminal (i.e. it is a pipe or file), so
+///   that piped / redirected output never contains raw escape sequences.
+fn colors_enabled() -> bool {
+    std::env::var_os("NO_COLOR").is_none() && std::io::stdout().is_terminal()
+}
 
 // ---------------------------------------------------------------------------
 // Output rendering options (#74, #76, #77)
@@ -409,6 +422,22 @@ fn run_keys(subcmd: KeysSubcommand) -> Result<(), String> {
 ///
 /// Rejects any value that could be used to inject additional CLI flags or
 /// smuggle shell metacharacters through the argument list.
+///
+/// # Wiring (keep in sync!)
+///
+/// Every handler in this module that accepts an `--agreement-id` **must** call
+/// this as its first statement, before `confirm_action` and before any
+/// argument is built — otherwise the value reaches `execute` → `RpcClient`
+/// unchecked. As of #405 all nine do: `run_init`, `run_lock_funds`,
+/// `run_submit_work`, `run_approve_release`, `run_raise_dispute`,
+/// `run_resolve_dispute`, `run_cancel_milestone`, `run_status`,
+/// `run_milestone_status`.
+///
+/// `tests/cli_integration.rs::test_injected_agreement_id_rejected_by_every_command`
+/// drives every one of those handlers without `--dry-run` and fails if any of
+/// them stops calling this, so dropping a call cannot regress silently. When
+/// adding a command that takes an agreement ID, add it to the
+/// `agreement_id_commands()` table in that file too.
 fn validate_agreement_id(id: &str) -> Result<(), String> {
     crate::sanitizer::sanitize_hex_id(id)?;
     if crate::utils::is_valid_hex(id, 64) {
@@ -907,6 +936,12 @@ fn build_milestones_json(csv: &str) -> Result<String, String> {
 /// This is the single entry point every command handler funnels through, so
 /// `--dry-run`, `--json`, `--human-readable`, and `--quiet` behave
 /// consistently across all commands (#74, #76, #77).
+///
+/// Under `--dry-run` the preview command string is wrapped in a synthetic
+/// `InvokeOutput` and passed through the same `render_output` path as a
+/// real result, so `--dry-run --json` produces a valid JSON envelope,
+/// `--dry-run --quiet` is silent, and `--dry-run --human-readable` prints a
+/// formatted preview — matching the documented guarantee above.
 fn execute(
     config: &Config,
     fn_name: &str,
@@ -914,8 +949,14 @@ fn execute(
     opts: &OutputOpts,
 ) -> Result<(), String> {
     if opts.dry_run {
-        println!("{}", RpcClient::preview(config, fn_name, args));
-        return Ok(());
+        let preview = RpcClient::preview(config, fn_name, args);
+        let out = InvokeOutput {
+            stdout: preview.clone(),
+            stderr: String::new(),
+            success: true,
+            command_debug: preview,
+        };
+        return render_output(&out, opts);
     }
 
     let out = RpcClient::invoke(config, fn_name, args, opts.quiet);
@@ -1010,37 +1051,64 @@ fn json_envelope(out: &InvokeOutput) -> serde_json::Value {
 /// `--human-readable` / `-H` renderer (#74): parse the stellar CLI JSON output
 /// and print a colorized, formatted summary. Falls back to raw text if the
 /// output isn't valid JSON.
+///
+/// Colors are only emitted when `colors_enabled()` returns `true`; otherwise
+/// all ANSI sequences are replaced with empty strings so that piped / file
+/// output is clean plain text.
 fn render_human(out: &InvokeOutput) -> Result<(), String> {
+    render_human_to(out, colors_enabled(), &mut std::io::stdout())
+}
+
+/// Inner implementation of `render_human` that writes to an arbitrary `Write`
+/// sink and accepts an explicit `use_color` flag. Extracted so that unit tests
+/// can capture output and control color behavior without touching env vars or
+/// real stdout.
+fn render_human_to(
+    out: &InvokeOutput,
+    use_color: bool,
+    writer: &mut dyn std::io::Write,
+) -> Result<(), String> {
     let trimmed = out.stdout.trim();
 
+    // Resolve color codes once per call so every format site is consistent.
+    let (green, red, bold, reset) = if use_color {
+        (ANSI_GREEN, ANSI_RED, ANSI_BOLD, ANSI_RESET)
+    } else {
+        ("", "", "", "")
+    };
+
     if out.success {
-        println!("{ANSI_GREEN}{ANSI_BOLD}\u{2714} Success{ANSI_RESET}");
+        writeln!(writer, "{green}{bold}\u{2714} Success{reset}").ok();
         match serde_json::from_str::<serde_json::Value>(trimmed) {
             Ok(serde_json::Value::Object(map)) if !map.is_empty() => {
                 for (key, value) in map {
-                    println!("  {ANSI_BOLD}{key}{ANSI_RESET}: {}", format_json_value(&value));
+                    writeln!(writer, "  {bold}{key}{reset}: {}", format_json_value(&value)).ok();
                 }
             }
-            Ok(other) if !trimmed.is_empty() => println!("  {}", format_json_value(&other)),
-            _ if !trimmed.is_empty() => println!("  {trimmed}"),
+            Ok(other) if !trimmed.is_empty() => {
+                writeln!(writer, "  {}", format_json_value(&other)).ok();
+            }
+            _ if !trimmed.is_empty() => {
+                writeln!(writer, "  {trimmed}").ok();
+            }
             _ => {}
         }
 
         if let serde_json::Value::Array(events) = extract_events(&out.stderr) {
-            println!("  {ANSI_BOLD}events{ANSI_RESET}:");
+            writeln!(writer, "  {bold}events{reset}:").ok();
             for event in events {
-                println!("    - {}", format_json_value(&event));
+                writeln!(writer, "    - {}", format_json_value(&event)).ok();
             }
         }
         Ok(())
     } else {
-        println!("{ANSI_RED}{ANSI_BOLD}\u{2718} Failed{ANSI_RESET}");
-        println!("  {ANSI_BOLD}command{ANSI_RESET}: {}", out.command_debug);
+        writeln!(writer, "{red}{bold}\u{2718} Failed{reset}").ok();
+        writeln!(writer, "  {bold}command{reset}: {}", out.command_debug).ok();
         if !trimmed.is_empty() {
-            println!("  {ANSI_BOLD}stdout{ANSI_RESET}: {trimmed}");
+            writeln!(writer, "  {bold}stdout{reset}: {trimmed}").ok();
         }
         if !out.stderr.trim().is_empty() {
-            println!("  {ANSI_BOLD}stderr{ANSI_RESET}: {}", out.stderr.trim());
+            writeln!(writer, "  {bold}stderr{reset}: {}", out.stderr.trim()).ok();
         }
         Err(String::new())
     }
@@ -1376,6 +1444,23 @@ mod tests {
         // space injection attempt
         let id = format!("{} --extra-flag x {}", "a".repeat(30), "b".repeat(30));
         assert!(validate_agreement_id(&id).is_err());
+    }
+
+    /// A 64-hex ID with a trailing `;` is 65 chars of which the first 64 are
+    /// valid hex — a length-only or prefix check would let it through, and the
+    /// `;` would reach the argument vector as a second argv entry.
+    ///
+    /// This is the adjacent case for the integration test of the same name;
+    /// it lives here because a length-only regression must be caught at the
+    /// guard itself, not only through the command handlers.
+    #[test]
+    fn agreement_id_rejects_valid_hex_prefix_with_trailing_metacharacter() {
+        let id = format!("{};", "a".repeat(64));
+        assert_eq!(id.len(), 65);
+        assert!(
+            validate_agreement_id(&id).is_err(),
+            "a valid 64-hex prefix must not license a trailing metacharacter"
+        );
     }
 
     #[test]
@@ -1714,6 +1799,53 @@ mod tests {
         assert!(render_human(&ok_output("not json at all")).is_ok());
     }
 
+    // --- render_human color suppression (#408) ---
+
+    /// Helper: runs render_human_to with an in-memory buffer and returns the
+    /// captured output as a String.
+    fn capture_render_human(out: &InvokeOutput, use_color: bool) -> String {
+        let mut buf: Vec<u8> = Vec::new();
+        let _ = render_human_to(out, use_color, &mut buf);
+        String::from_utf8(buf).expect("render_human_to wrote non-UTF-8")
+    }
+
+    #[test]
+    fn render_human_no_color_suppresses_all_escape_sequences_on_success() {
+        // When use_color=false every \x1b[ sequence must be absent from output.
+        let rendered = capture_render_human(&ok_output(r#"{"amount":"100"}"#), false);
+        assert!(
+            !rendered.contains('\x1b'),
+            "expected no ANSI escapes in plain-text output, got: {rendered:?}"
+        );
+        // The semantic content must still be present.
+        assert!(rendered.contains("Success"), "success marker missing");
+        assert!(rendered.contains("amount"), "field key missing");
+        assert!(rendered.contains("100"), "field value missing");
+    }
+
+    #[test]
+    fn render_human_no_color_suppresses_all_escape_sequences_on_failure() {
+        // Adjacent case: failure path must also be escape-free when colors off.
+        let rendered = capture_render_human(&fail_output("bad input", "contract error"), false);
+        assert!(
+            !rendered.contains('\x1b'),
+            "expected no ANSI escapes in plain-text failure output, got: {rendered:?}"
+        );
+        assert!(rendered.contains("Failed"), "failure marker missing");
+        assert!(rendered.contains("contract error"), "stderr missing from output");
+    }
+
+    #[test]
+    fn render_human_with_color_emits_escape_sequences() {
+        // When use_color=true the ANSI codes must be present so we know the
+        // color path is not accidentally dead.
+        let rendered = capture_render_human(&ok_output(r#"{"k":"v"}"#), true);
+        assert!(
+            rendered.contains('\x1b'),
+            "expected ANSI escapes when colors enabled, got: {rendered:?}"
+        );
+    }
+
     // --- render_output dispatch ---
 
     fn opts(format: OutputFormat) -> OutputOpts {
@@ -1853,5 +1985,103 @@ mod tests {
         );
         // render_json emits the envelope; the seed must not be in stderr either.
         assert!(!out.stderr.contains(&seed));
+    // --- dry-run output routing (#407) ---
+
+    /// Helper: an InvokeOutput shaped exactly like what execute() produces for
+    /// dry-run — a preview command string as stdout, success=true, empty stderr.
+    fn dry_run_output(preview: &str) -> InvokeOutput {
+        InvokeOutput {
+            stdout: preview.to_string(),
+            stderr: String::new(),
+            success: true,
+            command_debug: preview.to_string(),
+        }
+    }
+
+    /// Helper: OutputOpts with dry_run=true and the given format.
+    fn dry_run_opts(format: OutputFormat) -> OutputOpts {
+        OutputOpts {
+            format,
+            quiet: false,
+            dry_run: true,
+        }
+    }
+
+    /// `--dry-run --json` must produce a parseable JSON envelope (not a raw
+    /// plain-text line), so scripts that always pass `--json` keep working.
+    #[test]
+    fn dry_run_json_produces_valid_json_envelope() {
+        let preview = "stellar contract invoke --id CABC -- init --agreement-id deadbeef";
+        let out = dry_run_output(preview);
+        // Capture what render_json would write by checking the envelope directly.
+        let envelope = json_envelope(&out);
+        // Must be a JSON object with "status": "success".
+        assert_eq!(envelope["status"], "success");
+        // The result field must contain the preview string (not null).
+        assert_eq!(envelope["result"], serde_json::Value::String(preview.to_string()));
+        // error field must be null on success.
+        assert_eq!(envelope["error"], serde_json::Value::Null);
+        // The whole envelope must serialise without panic.
+        let serialised = serde_json::to_string(&envelope).expect("envelope must serialise");
+        // And round-trip back to a Value without error.
+        let _parsed: serde_json::Value =
+            serde_json::from_str(&serialised).expect("envelope must be valid JSON");
+        // render_json itself must return Ok(()).
+        assert!(render_output(&out, &dry_run_opts(OutputFormat::Json)).is_ok());
+    }
+
+    /// `--dry-run --human-readable` must succeed and go through the human
+    /// renderer (success path), not bail out before reaching render_output.
+    #[test]
+    fn dry_run_human_readable_succeeds() {
+        let out = dry_run_output("stellar contract invoke --id CABC -- lock_funds");
+        assert!(render_output(&out, &dry_run_opts(OutputFormat::Human)).is_ok());
+    }
+
+    /// `--dry-run` (raw / default format) must still return Ok(()).
+    /// This is the existing behaviour — the test guards against regression.
+    #[test]
+    fn dry_run_raw_succeeds() {
+        let out = dry_run_output("stellar contract invoke --id CABC -- submit_work");
+        assert!(render_output(&out, &dry_run_opts(OutputFormat::Raw)).is_ok());
+    }
+
+    /// `--dry-run --quiet` forces Json format; the call must still succeed and
+    /// produce a valid JSON envelope rather than printing a plain string.
+    #[test]
+    fn dry_run_quiet_produces_valid_json_envelope() {
+        let preview = "stellar contract invoke --id CABC -- cancel_milestone";
+        let out = dry_run_output(preview);
+        let opts = OutputOpts {
+            format: OutputFormat::Json, // quiet forces Json in dispatch
+            quiet: true,
+            dry_run: true,
+        };
+        assert!(render_output(&out, &opts).is_ok());
+        // Verify the envelope shape independently.
+        let envelope = json_envelope(&out);
+        assert_eq!(envelope["status"], "success");
+        let serialised = serde_json::to_string(&envelope).expect("must serialise");
+        serde_json::from_str::<serde_json::Value>(&serialised)
+            .expect("--dry-run --quiet must produce parseable JSON");
+    }
+
+    /// execute() end-to-end with dry_run=true and Json format must return
+    /// Ok(()) without panicking — confirms the fix wires up correctly.
+    #[test]
+    fn execute_dry_run_json_returns_ok() {
+        let config = Config {
+            rpc_url: "https://soroban-testnet.stellar.org".to_string(),
+            network_passphrase: "Test SDF Network ; September 2015".to_string(),
+            contract_id: format!("C{}", "A".repeat(55)),
+            source_key: "alice".to_string(),
+        };
+        let opts = OutputOpts {
+            format: OutputFormat::Json,
+            quiet: false,
+            dry_run: true,
+        };
+        let result = execute(&config, "init", &[], &opts);
+        assert!(result.is_ok(), "execute dry-run --json must return Ok, got: {result:?}");
     }
 }

@@ -200,6 +200,236 @@ fn test_happy_path() {
     );
 }
 
+/// Exploit path (#382): `init` must reject a milestone pre-set to any status
+/// other than `Pending`.
+///
+/// Every agreement sharing a token draws from one pooled contract balance.
+/// A caller controlling all three roles (payer, payee, resolver) could
+/// otherwise `init` an agreement with a phantom `WorkSubmitted` milestone and
+/// call `approve_and_release` immediately, or a phantom `Disputed` one and
+/// call `resolve_dispute` — either transfers tokens out of the shared pool
+/// that were never escrowed for that milestone.
+///
+/// Each non-Pending status is checked individually because they are the ones
+/// that reach a fund-moving entrypoint; `Completed` and `Refunded` are inert
+/// dead ends, but are rejected too so the invariant stays "Pending only".
+#[test]
+fn test_init_rejects_non_pending_initial_milestone_status() {
+    // WorkSubmitted → approve_and_release; Disputed → resolve_dispute.
+    // Those two are the actual drain vectors; the rest complete the set.
+    let forbidden = [
+        EscrowStatus::Funded,
+        EscrowStatus::WorkSubmitted,
+        EscrowStatus::Completed,
+        EscrowStatus::Disputed,
+        EscrowStatus::Refunded,
+    ];
+
+    for (i, status) in forbidden.iter().enumerate() {
+        let (env, payer, payee, dispute_resolver, token_address, client) = setup();
+        // Distinct seed per status keeps failures attributable.
+        let id = agreement_id(&env, 100 + i as u8);
+        let milestones = vec![
+            &env,
+            Milestone {
+                amount: 1_000,
+                status: status.clone(),
+                proof_uri: None,
+            },
+        ];
+
+        env.mock_all_auths();
+        let result = client.try_init(
+            &id,
+            &payer,
+            &payee,
+            &token_address,
+            &milestones,
+            &dispute_resolver,
+        );
+
+        assert_eq!(
+            result,
+            Err(Ok(TrellisError::InvalidInitialMilestoneStatus)),
+            "init must reject a milestone initialised as {status:?} — it is a \
+             claim on pooled funds that were never escrowed for it"
+        );
+
+        // The rejected init must not have written anything to storage,
+        // otherwise the phantom agreement would still be reachable.
+        assert!(
+            client.try_get_agreement(&id).is_err(),
+            "a rejected init must not persist an agreement for {status:?}"
+        );
+    }
+}
+
+/// Adjacent case (#382): one non-Pending milestone poisons the whole `init`.
+///
+/// This is what regresses if the check is written to coerce offending
+/// milestones back to `Pending` instead of rejecting them — the drain would
+/// be closed, but the caller would silently receive an agreement whose
+/// declared state was rewritten. Rejecting atomically surfaces the bug to
+/// the integrator instead of hiding it.
+#[test]
+fn test_init_rejects_whole_set_when_one_milestone_is_not_pending() {
+    let (env, payer, payee, dispute_resolver, token_address, client) = setup();
+    let id = agreement_id(&env, 120);
+
+    // Two valid Pending milestones around one phantom Funded one.
+    let milestones = vec![
+        &env,
+        Milestone {
+            amount: 1_000,
+            status: EscrowStatus::Pending,
+            proof_uri: None,
+        },
+        Milestone {
+            amount: 2_000,
+            status: EscrowStatus::Funded,
+            proof_uri: None,
+        },
+        Milestone {
+            amount: 3_000,
+            status: EscrowStatus::Pending,
+            proof_uri: None,
+        },
+    ];
+
+    env.mock_all_auths();
+    let result = client.try_init(
+        &id,
+        &payer,
+        &payee,
+        &token_address,
+        &milestones,
+        &dispute_resolver,
+    );
+
+    assert_eq!(
+        result,
+        Err(Ok(TrellisError::InvalidInitialMilestoneStatus)),
+        "one non-Pending milestone must reject the entire init, not be coerced"
+    );
+    assert!(
+        client.try_get_agreement(&id).is_err(),
+        "a partially-valid milestone set must not be persisted"
+    );
+}
+
+/// Adjacent case (#382): the legitimate happy path is untouched, and the
+/// agreement created under the new invariant stays fully usable.
+///
+/// Guards against the new validation being over-eager — rejecting a
+/// legitimate `Pending` milestone, breaking the existing amount checks, or
+/// writing the agreement in a state that blocks the normal escrow flow.
+#[test]
+fn test_init_accepts_pending_milestones_happy_path() {
+    let (env, payer, payee, dispute_resolver, token_address, client) = setup();
+    let id = agreement_id(&env, 121);
+    let token_client = token::TokenClient::new(&env, &token_address);
+    let payer_before = token_client.balance(&payer);
+
+    let milestones = vec![
+        &env,
+        Milestone {
+            amount: 1_000,
+            status: EscrowStatus::Pending,
+            proof_uri: None,
+        },
+        Milestone {
+            amount: 2_000,
+            status: EscrowStatus::Pending,
+            proof_uri: None,
+        },
+    ];
+
+    env.mock_all_auths();
+    client.init(
+        &id,
+        &payer,
+        &payee,
+        &token_address,
+        &milestones,
+        &dispute_resolver,
+    );
+
+    let agreement = client.get_agreement(&id);
+    assert_eq!(agreement.total_amount, 3_000);
+    assert!(
+        agreement.milestones.iter().all(|m| m.status == EscrowStatus::Pending),
+        "all milestones should be stored as Pending"
+    );
+    // init must still move no tokens — it only records the agreement.
+    assert_eq!(
+        token_client.balance(&payer),
+        payer_before,
+        "init must not move any tokens"
+    );
+    assert_eq!(token_client.balance(&client.address), 0);
+
+    // The normal lock → submit → release path still completes, proving the
+    // invariant does not block legitimate escrow.
+    env.mock_all_auths();
+    client.lock_funds(&id, &0u32);
+    assert_eq!(token_client.balance(&client.address), 1_000);
+
+    client.submit_work(&id, &0u32, &None);
+    client.approve_and_release(&id, &0u32);
+    assert_eq!(token_client.balance(&payee), 1_000);
+    assert_eq!(token_client.balance(&client.address), 0);
+}
+
+/// `lock_funds` moves the payer's tokens via a single `token::transfer` that
+/// the payer authorizes with `require_auth()` — there is no approve/allowance
+/// step anywhere in the crate (#383).
+///
+/// The `setup()` fixture deploys a Stellar Asset Contract and mints the payer a
+/// balance, then registers the Trellis contract. Nothing in that sequence — or
+/// anywhere between `init` and `lock_funds` below — calls `approve` or
+/// `set_allowance`. If `lock_funds` depended on a pre-existing allowance, the
+/// transfer would fail here. It succeeds, and the funds land in the escrow
+/// contract, which is the behavior the doc comment now describes.
+#[test]
+fn test_lock_funds_needs_no_token_allowance() {
+    let (env, payer, payee, dispute_resolver, token_address, client) = setup();
+    let token_client = token::TokenClient::new(&env, &token_address);
+    let id = agreement_id(&env, 90);
+    let amount: i128 = 1_000;
+
+    auth_as(&env, &payer);
+    client.init(
+        &id,
+        &payer,
+        &payee,
+        &token_address,
+        &one_milestone(&env, amount),
+        &dispute_resolver,
+    );
+
+    // Sanity check on the fixture: the payer is funded and the escrow contract
+    // holds nothing, so any balance the escrow receives after `lock_funds`
+    // came from this transfer and nowhere else.
+    assert_eq!(token_client.balance(&client.address), 0);
+    let payer_before = token_client.balance(&payer);
+    assert!(payer_before >= amount, "fixture must fund the payer");
+
+    // No approve / set_allowance call is made here — deliberately.
+    auth_as(&env, &payer);
+    client.lock_funds(&id, &0u32);
+
+    assert_eq!(
+        token_client.balance(&client.address),
+        amount,
+        "escrow should hold the milestone amount with no allowance step"
+    );
+    assert_eq!(
+        token_client.balance(&payer),
+        payer_before - amount,
+        "payer balance should drop by exactly the milestone amount"
+    );
+}
+
 /// Calling `init` twice with the same agreement_id must return AlreadyInitialized.
 #[test]
 fn test_double_init_fails() {
@@ -608,21 +838,24 @@ fn test_get_agreement() {
     // ── Happy path: agreement exists ──────────────────────────────────────
     let agreement = client.get_agreement(&id);
 
-    assert_eq!(agreement.payer, payer, "payer address must match");
-    assert_eq!(agreement.payee, payee, "payee address must match");
+    // `Agreement` derives `PartialEq`, so the whole struct read back from the
+    // contract is compared against the expected value in one assertion. This
+    // covers every field — including `total_amount`, `token` and
+    // `dispute_resolver`, which a field-by-field check tends to skip — and it
+    // keeps covering them automatically if a field is added later.
+    let expected = crate::types::Agreement {
+        agreement_id: id.clone(),
+        payer: payer.clone(),
+        payee: payee.clone(),
+        token: token_address.clone(),
+        milestones: one_milestone(&env, 750),
+        dispute_resolver: dispute_resolver.clone(),
+        total_amount: 750,
+    };
     assert_eq!(
-        agreement.milestones.len(),
-        1,
-        "should have exactly one milestone"
+        agreement, expected,
+        "get_agreement must round-trip the whole struct"
     );
-
-    let milestone = agreement.milestones.get(0).expect("milestone 0 must exist");
-    assert_eq!(
-        milestone.status,
-        crate::types::EscrowStatus::Pending,
-        "freshly created milestone must be Pending"
-    );
-    assert_eq!(milestone.amount, 750, "milestone amount must match");
 
     // ── Not-found path: unknown ID returns AgreementNotFound ──────────────
     let fake_id = agreement_id(&env, 99); // never initialized
@@ -632,6 +865,87 @@ fn test_get_agreement() {
         result.err().unwrap(),
         Ok(TrellisError::AgreementNotFound),
         "error must be AgreementNotFound"
+    );
+}
+
+/// Adjacent case to `test_get_agreement`: after a state transition, the whole
+/// `Agreement` read back must differ from the freshly-`init`ed one in exactly
+/// the milestone that moved — and in nothing else.
+///
+/// A field-by-field comparison would let a transition that also clobbered
+/// `total_amount`, `token` or `dispute_resolver` pass, as long as the fields it
+/// happened to look at were right. Comparing the full struct before and after
+/// pins down that `lock_funds` touches the status of milestone 1 and leaves
+/// every other field — and every other milestone — byte-identical.
+#[test]
+fn test_agreement_whole_struct_changes_only_the_locked_milestone() {
+    let (env, payer, payee, dispute_resolver, token_address, client) = setup();
+    let id = agreement_id(&env, 6);
+
+    let milestones = vec![
+        &env,
+        Milestone {
+            amount: 300,
+            status: EscrowStatus::Pending,
+            proof_uri: None,
+        },
+        Milestone {
+            amount: 400,
+            status: EscrowStatus::Pending,
+            proof_uri: None,
+        },
+    ];
+
+    client.init(
+        &id,
+        &payer,
+        &payee,
+        &token_address,
+        &milestones,
+        &dispute_resolver,
+    );
+
+    let before = client.get_agreement(&id);
+    assert_eq!(
+        before.total_amount, 700,
+        "total_amount must be the sum of both milestones"
+    );
+    assert!(
+        before
+            .milestones
+            .iter()
+            .all(|m| m.status == EscrowStatus::Pending),
+        "both milestones start Pending"
+    );
+
+    client.lock_funds(&id, &1u32);
+
+    let after = client.get_agreement(&id);
+
+    // Milestone 1 moved Pending -> Funded; milestone 0 did not.
+    let expected_locked = Milestone {
+        amount: 400,
+        status: EscrowStatus::Funded,
+        proof_uri: None,
+    };
+    assert_eq!(
+        after.milestones.get(1),
+        Some(expected_locked.clone()),
+        "milestone 1 must be Funded with its amount and proof_uri intact"
+    );
+    assert_eq!(
+        after.milestones.get(0),
+        before.milestones.get(0),
+        "locking milestone 1 must not disturb milestone 0"
+    );
+
+    // Everything outside `milestones` is unchanged by a lock: compare the full
+    // struct against `before` with only milestone 1's status swapped.
+    let mut expected_after = before.clone();
+    expected_after.milestones.set(1, expected_locked);
+    assert_eq!(
+        after, expected_after,
+        "lock_funds must change only milestone 1's status"
     );
 }
 

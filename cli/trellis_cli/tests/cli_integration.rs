@@ -225,6 +225,81 @@ fn test_missing_required_env_vars() {
 }
 
 // ---------------------------------------------------------------------------
+// #406: --dry-run must not require the stellar binary
+// ---------------------------------------------------------------------------
+
+/// Confirms that `--dry-run` prints a command preview and exits 0 even when
+/// the `stellar` binary is completely absent from PATH.
+///
+/// This is the core regression test for issue #406: `validate_environment()`
+/// must be skipped for dry-run invocations.
+#[test]
+fn test_dry_run_works_without_stellar_binary() {
+    let output = Command::new("cargo")
+        .args([
+            "run", "--quiet", "--",
+            "lock",
+            "--agreement-id", "0000000000000000000000000000000000000000000000000000000000000001",
+            "--milestone-id", "0",
+            "--dry-run",
+        ])
+        // Wipe PATH so the stellar binary genuinely cannot be found.
+        .env("PATH", "")
+        .env("TRELLIS_CONTRACT_ID", "CBCDEFGHIJKLMNOPQRSTUVWXYZ234567ABCDEFGHIJKLMNOPQRSTUVWXYZ")
+        .env("TRELLIS_SOURCE_KEY", "SBCDEFGHIJKLMNOPQRSTUVWXYZ234567ABCDEFGHIJKLMNOPQRSTUVWXYZ")
+        .current_dir(env::var("CARGO_MANIFEST_DIR").unwrap())
+        .output()
+        .expect("failed to spawn trellis process");
+
+    assert!(
+        output.status.success(),
+        "--dry-run should succeed even when stellar is not in PATH\nstderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("stellar") || stdout.contains("contract") || stdout.contains("invoke"),
+        "--dry-run output should contain a stellar command preview\nstdout: {}",
+        stdout
+    );
+}
+
+/// Adjacent regression test: without `--dry-run`, the binary check must still
+/// fire and produce a clear error message when stellar is absent from PATH.
+///
+/// This guards against accidentally removing the check for non-dry-run paths
+/// while fixing #406.
+#[test]
+fn test_non_dry_run_still_requires_stellar_binary() {
+    let output = Command::new("cargo")
+        .args([
+            "run", "--quiet", "--",
+            "status",
+            "--agreement-id", "0000000000000000000000000000000000000000000000000000000000000001",
+        ])
+        // Wipe PATH so the stellar binary cannot be found.
+        .env("PATH", "")
+        .env("TRELLIS_CONTRACT_ID", "CBCDEFGHIJKLMNOPQRSTUVWXYZ234567ABCDEFGHIJKLMNOPQRSTUVWXYZ")
+        .env("TRELLIS_SOURCE_KEY", "SBCDEFGHIJKLMNOPQRSTUVWXYZ234567ABCDEFGHIJKLMNOPQRSTUVWXYZ")
+        .current_dir(env::var("CARGO_MANIFEST_DIR").unwrap())
+        .output()
+        .expect("failed to spawn trellis process");
+
+    assert!(
+        !output.status.success(),
+        "non-dry-run should fail when stellar is not in PATH"
+    );
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("stellar") || stderr.contains("not found") || stderr.contains("install"),
+        "error message should mention the missing stellar binary\nstderr: {}",
+        stderr
+    );
+}
+
+// ---------------------------------------------------------------------------
 // Command-specific tests
 // ---------------------------------------------------------------------------
 
@@ -349,3 +424,131 @@ fn test_completion_command_generates_shell_completions() {
         "bash completion should contain completion function"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Agreement ID injection guard (#405)
+// ---------------------------------------------------------------------------
+// `validate_agreement_id` is invoked at the top of every command handler that
+// accepts an `--agreement-id`, so a hostile value is rejected before any
+// argument is built and long before `RpcClient` would shell out to
+// `stellar contract invoke`.
+//
+// These tests assert that ordering directly: every command below is run
+// WITHOUT `--dry-run`, so if validation were ever moved after argument
+// building (or removed), the mock `stellar` binary would be reached and
+// would succeed — the test would then fail on `assert!(!status.success())`.
+// A dry-run-only test could not distinguish "rejected by validation" from
+// "accepted and previewed".
+
+/// Every command handler that takes an `--agreement-id`, paired with the
+/// extra args it needs, so a single table can drive all of them.
+///
+/// Kept as an explicit table rather than generated so that adding a new
+/// command without covering it here is a visible omission during review.
+fn agreement_id_commands() -> Vec<(&'static str, Vec<&'static str>)> {
+    let payer = "GBCDEFGHIJKLMNOPQRSTUVWXYZ234567ABCDEFGHIJKLMNOPQRSTUVW";
+    vec![
+        ("init", vec![
+            "--payer", payer,
+            "--payee", "GZYXWVUTSRQPONMLKJIHGFEDCBA234567ZYXWVUTSRQPONMLKJIHGF",
+            "--token", "CBCDEFGHIJKLMNOPQRSTUVWXYZ234567ABCDEFGHIJKLMNOPQRSTUVWXYZ",
+            "--resolver", "GRESOLVABCDEFGHIJKLMNOPQRSTUVWXYZ234567ABCDEFGHIJKLMNO",
+            "--milestones", "1000",
+            "--yes",
+        ]),
+        ("lock", vec!["--milestone-id", "0", "--yes"]),
+        ("submit-work", vec!["--milestone-id", "0", "--yes"]),
+        ("approve-release", vec!["--milestone-id", "0", "--yes"]),
+        ("raise-dispute", vec!["--milestone-id", "0", "--caller", payer, "--yes"]),
+        ("resolve-dispute", vec!["--milestone-id", "0", "--yes"]),
+        ("cancel-milestone", vec!["--milestone-id", "0", "--yes"]),
+        ("status", vec![]),
+        ("milestone-status", vec!["--milestone-id", "0"]),
+    ]
+}
+
+/// Assemble `<cmd> --agreement-id <id> <extra...>` for a handler under test.
+fn build_args(cmd: &str, extra: &[&str], id: &str) -> Vec<String> {
+    let mut args: Vec<String> = vec![
+        cmd.to_string(),
+        "--agreement-id".to_string(),
+        id.to_string(),
+    ];
+    args.extend(extra.iter().map(|s| s.to_string()));
+    args
+}
+
+/// A 64-char hex ID with a smuggled `--flag` appended past the 64-char mark.
+///
+/// This is the exact shape the guard exists to stop: the first 64 chars are a
+/// well-formed ID, so only a length+charset check catches the trailing
+/// ` --network mainnet` argument-injection payload.
+const INJECTED_AGREEMENT_ID: &str =
+    "0000000000000000000000000000000000000000000000000000000000000001 --network mainnet --source attacker";
+
+/// A payload that is a well-formed 64-char hex ID with a `;` appended — the
+/// shape that would smuggle a second argv entry if the charset check were
+/// ever weakened to a length-only or prefix check.
+///
+/// The 64-hex prefix is important: only a *full* length+charset check rejects
+/// it, so this is the adjacent case most likely to regress if the guard is
+/// "fixed" carelessly into something that just checks `id.len() >= 64`.
+const SEMICOLON_TRAILING_AGREEMENT_ID: &str =
+    "0000000000000000000000000000000000000000000000000000000000000001;id";
+
+/// Every command must reject an argument-injection payload in `--agreement-id`
+/// before reaching `RpcClient` (#405).
+#[test]
+fn test_injected_agreement_id_rejected_by_every_command() {
+    for (cmd, extra) in agreement_id_commands() {
+        let output = trellis_cmd()
+            .args(build_args(cmd, &extra, INJECTED_AGREEMENT_ID))
+            .output()
+            .expect("failed to execute trellis");
+
+        assert!(
+            !output.status.success(),
+            "`{cmd}` must reject an injected --agreement-id before invoking the \
+             stellar CLI (no --dry-run: a reached mock binary would succeed)"
+        );
+
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("agreement_id"),
+            "`{cmd}` should name the offending field in its error\nstderr: {stderr}"
+        );
+    }
+}
+
+/// Adjacent regression case (#405): a 64-hex ID with a trailing shell
+/// metacharacter must also be rejected.
+///
+/// This guards the "only the length is checked" failure mode. The value's
+/// first 64 characters are valid hex, so a length-only check would wave it
+/// through and let `;` reach the argument vector.
+#[test]
+fn test_metacharacter_agreement_id_rejected_by_every_command() {
+    for (cmd, extra) in agreement_id_commands() {
+        let output = trellis_cmd()
+            .args(build_args(
+                cmd,
+                &extra,
+                SEMICOLON_TRAILING_AGREEMENT_ID,
+            ))
+            .output()
+            .expect("failed to execute trellis");
+
+        assert!(
+            !output.status.success(),
+            "`{cmd}` must reject a metacharacter in --agreement-id before \
+             invoking the stellar CLI"
+        );
+
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("agreement_id"),
+            "`{cmd}` should name the offending field in its error\nstderr: {stderr}"
+        );
+    }
+}
+
