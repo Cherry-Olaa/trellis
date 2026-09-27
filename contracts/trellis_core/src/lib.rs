@@ -50,7 +50,7 @@ pub struct TrellisContract;
 //
 // There are no `unwrap()` / `expect()` calls anywhere in the contract crate's
 // non-test sources. The `token::Client` transfer calls can still trap inside
-// the SDK (e.g. insufficient balance/allowance) — that is the token
+// the SDK (e.g. the payer does not hold enough balance) — that is the token
 // contract's own boundary and is intentionally left to it. A custom
 // `#[panic_handler]` is not added: `soroban-sdk` already provides one for the
 // wasm build and a second definition is a duplicate-lang-item error.
@@ -156,8 +156,23 @@ impl TrellisContract {
 
     /// Lock funds for a single milestone into the contract.
     ///
-    /// The payer authorises this call and must have pre-approved the token
-    /// transfer allowance on the token contract.
+    /// The payer authorises this call with `require_auth()`. The contract then
+    /// pulls the tokens itself, via a single
+    /// `token::Client::transfer(payer → this contract)` call — the payer's
+    /// authorization *is* the authorization for that transfer, because the
+    /// token contract sees the transfer as invoked by this contract on the
+    /// payer's behalf and re-checks the payer's signature.
+    ///
+    /// No prior approval or allowance step is involved. There is no
+    /// `approve` / `set_allowance` call anywhere in this crate, so callers
+    /// must **not** pre-approve the escrow contract on the token contract
+    /// before calling this — doing so is unnecessary, and for SAC-style
+    /// tokens there is no allowance to set in the first place. The only
+    /// precondition is that the payer holds at least `milestone.amount` of
+    /// `agreement.token`.
+    ///
+    /// The milestone must be `Pending`; any other status returns
+    /// [`TrellisError::InvalidStateTransition`].
     ///
     /// # Errors
     /// - [`TrellisError::AgreementNotFound`] – unknown agreement ID.

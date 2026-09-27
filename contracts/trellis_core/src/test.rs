@@ -380,6 +380,56 @@ fn test_init_accepts_pending_milestones_happy_path() {
     assert_eq!(token_client.balance(&client.address), 0);
 }
 
+/// `lock_funds` moves the payer's tokens via a single `token::transfer` that
+/// the payer authorizes with `require_auth()` — there is no approve/allowance
+/// step anywhere in the crate (#383).
+///
+/// The `setup()` fixture deploys a Stellar Asset Contract and mints the payer a
+/// balance, then registers the Trellis contract. Nothing in that sequence — or
+/// anywhere between `init` and `lock_funds` below — calls `approve` or
+/// `set_allowance`. If `lock_funds` depended on a pre-existing allowance, the
+/// transfer would fail here. It succeeds, and the funds land in the escrow
+/// contract, which is the behavior the doc comment now describes.
+#[test]
+fn test_lock_funds_needs_no_token_allowance() {
+    let (env, payer, payee, dispute_resolver, token_address, client) = setup();
+    let token_client = token::TokenClient::new(&env, &token_address);
+    let id = agreement_id(&env, 90);
+    let amount: i128 = 1_000;
+
+    auth_as(&env, &payer);
+    client.init(
+        &id,
+        &payer,
+        &payee,
+        &token_address,
+        &one_milestone(&env, amount),
+        &dispute_resolver,
+    );
+
+    // Sanity check on the fixture: the payer is funded and the escrow contract
+    // holds nothing, so any balance the escrow receives after `lock_funds`
+    // came from this transfer and nowhere else.
+    assert_eq!(token_client.balance(&client.address), 0);
+    let payer_before = token_client.balance(&payer);
+    assert!(payer_before >= amount, "fixture must fund the payer");
+
+    // No approve / set_allowance call is made here — deliberately.
+    auth_as(&env, &payer);
+    client.lock_funds(&id, &0u32);
+
+    assert_eq!(
+        token_client.balance(&client.address),
+        amount,
+        "escrow should hold the milestone amount with no allowance step"
+    );
+    assert_eq!(
+        token_client.balance(&payer),
+        payer_before - amount,
+        "payer balance should drop by exactly the milestone amount"
+    );
+}
+
 /// Calling `init` twice with the same agreement_id must return AlreadyInitialized.
 #[test]
 fn test_double_init_fails() {
