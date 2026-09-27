@@ -164,6 +164,8 @@ trellis submit-work \
 `--proof-uri` is optional — omit it to mark the milestone submitted without a
 proof link. Do not pass an empty string: the contract stores `proof_uri` as an
 `Option`, so "no proof" is the absent flag, not `""`.
+The web UI follows the same rule: leaving the Proof URI field blank submits
+`None`, not an empty string.
 
 ### Approve and release payment
 
@@ -183,6 +185,9 @@ trellis raise-dispute \
 ```
 
 > Can be called by either the payer or the payee
+
+In the web UI, the Dispute button only appears when the connected wallet is the
+agreement's payer or payee; any other wallet sees an explanatory note instead.
 
 ### Resolve a dispute
 
