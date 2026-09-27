@@ -556,6 +556,16 @@ cargo deny check      # enforces deny.toml: advisories, licences, duplicate vers
 cargo audit           # RustSec advisory database check
 ```
 
+Note: Keep Cargo.lock in sync with Cargo.toml. CI now verifies the
+lockfile with `cargo check --locked --workspace` and will fail if it's out
+of date. To update the lockfile locally after changing dependencies run:
+
+```bash
+cargo update -p <pkg>
+# or to generate/update the lockfile explicitly:
+cargo generate-lockfile
+```
+
 Policy lives in [`deny.toml`](./deny.toml) at the repository root. A new
 RustSec advisory against any dependency (direct or transitive) fails the
 build.

@@ -671,7 +671,13 @@ fn test_get_milestone_returns_correct_milestone() {
     assert_eq!(m.status, EscrowStatus::Pending, "status must be Pending");
 }
 
-/// get_milestone returns None for an out-of-range milestone_id.
+/// `get_milestone` returns `None` when the `milestone_id` is out of range on an
+/// agreement that *does* exist.
+///
+/// This is the second half of the entrypoint's two `None` paths and is kept
+/// deliberately separate from
+/// `test_get_milestone_unknown_agreement_returns_none` below: here the
+/// agreement was read successfully and the lookup within it is what failed.
 #[test]
 fn test_get_milestone_invalid_id_returns_none() {
     let (env, payer, payee, dispute_resolver, token_address, client) = setup();
@@ -690,6 +696,105 @@ fn test_get_milestone_invalid_id_returns_none() {
     assert!(
         result.is_none(),
         "out-of-range milestone_id must return None"
+    );
+}
+
+/// `get_milestone` returns `None` when the `agreement_id` was never initialised.
+///
+/// This exercises the other half of the entrypoint's `.ok().and_then(..)` chain:
+/// `read_agreement` fails first, so `and_then` is never reached and the whole
+/// chain short-circuits to `None`. The existing
+/// `test_get_milestone_invalid_id_returns_none` only covers an out-of-range index
+/// on an agreement that *is* in storage, so this path — a storage miss rather
+/// than a vector miss — had no dedicated test.
+///
+/// Both cases are asserted to be `None` and, per the entrypoint's doc comment,
+/// are indistinguishable to a caller. See the `# Return type` section of
+/// [`Self::get_milestone`] for why they are not being split into distinct
+/// variants here.
+#[test]
+fn test_get_milestone_unknown_agreement_returns_none() {
+    let (env, _payer, _payee, _dispute_resolver, _token_address, client) = setup();
+
+    // Never passed to `init` — the storage read misses.
+    let missing = agreement_id(&env, 22);
+
+    assert!(
+        client.get_milestone(&missing, &0u32).is_none(),
+        "an agreement that was never initialised must return None, not a trap"
+    );
+
+    // A mid-range index takes the same path: the agreement is missing, so the
+    // index is never consulted.
+    assert!(
+        client.get_milestone(&missing, &1u32).is_none(),
+        "the milestone index must not matter when the agreement does not exist"
+    );
+
+    // Same ID at u32::MAX, to pin that the short-circuit is on the agreement
+    // rather than on any bound check inside `Vec::get`.
+    assert!(
+        client.get_milestone(&missing, &u32::MAX).is_none(),
+        "u32::MAX must return None for a missing agreement, not InvalidMilestone"
+    );
+}
+
+/// Adjacent case: a missing agreement must not disturb a real one.
+///
+/// `get_milestone` is a read-only view, so probing an unknown ID must leave
+/// every stored agreement byte-identical and must not emit events. This is the
+/// regression that a careless "fix" — routing the miss through
+/// `storage::write_agreement`, or bumping TTLs on a failed read — would
+/// introduce.
+#[test]
+fn test_get_milestone_unknown_agreement_leaves_existing_state_untouched() {
+    let (env, payer, payee, dispute_resolver, token_address, client) = setup();
+    let id = agreement_id(&env, 23);
+
+    let milestones = vec![
+        &env,
+        Milestone {
+            amount: 100,
+            status: EscrowStatus::Pending,
+            proof_uri: None,
+        },
+        Milestone {
+            amount: 200,
+            status: EscrowStatus::Pending,
+            proof_uri: None,
+        },
+    ];
+
+    client.init(
+        &id,
+        &payer,
+        &payee,
+        &token_address,
+        &milestones,
+        &dispute_resolver,
+    );
+
+    let before = client.get_agreement(&id);
+
+    // Probe an unknown ID, then re-read the real one.
+    let missing = agreement_id(&env, 24);
+    assert!(client.get_milestone(&missing, &0u32).is_none());
+
+    let after = client.get_agreement(&id);
+    assert_eq!(
+        after.milestones, before.milestones,
+        "probing a missing agreement must not alter an existing one"
+    );
+    assert_eq!(
+        after.total_amount, before.total_amount,
+        "probing a missing agreement must not change total_amount"
+    );
+
+    // The real agreement's milestone is still reachable and unchanged.
+    assert_eq!(
+        client.get_milestone(&id, &1u32).map(|m| m.amount),
+        Some(200),
+        "the existing agreement's milestone must still be readable"
     );
 }
 

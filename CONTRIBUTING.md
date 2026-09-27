@@ -176,16 +176,16 @@ cd contracts/trellis_core
 cargo test
 ```
 
-The suite currently runs **44 tests**, split across three modules:
+The suite currently runs **43 tests**, split across three modules:
 
 | Module | Tests | Coverage |
 | --- | --- | --- |
-| `src/test.rs` | 24 | Example-based lifecycle, error paths, role checks, and TTL extension |
+| `src/test.rs` | 23 | Example-based lifecycle, error paths, role checks, and TTL extension |
 | `src/test_properties.rs` | 11 | `proptest` invariants — balance conservation, invalid amounts, and milestone isolation |
 | `src/test_panic_boundaries.rs` | 9 | Panic-boundary and fuzz coverage for every entrypoint |
-| **Total** | **44** | |
+| **Total** | **43** | |
 
-Representative example-based tests in `src/test.rs` include `test_happy_path`, `test_double_init_fails`, `test_dispute_and_refund_to_payer`, `test_cancel_unfunded_milestone`, `test_cancel_funded_milestone_fails_with_invalid_state_transition`, `test_get_agreement`, `test_batch_lock_funds_partial_failure`, the `test_batch_lock_funds_empty_vec_*` edge-case tests, and the six `*_wrong_role_fails` authorization tests.
+Representative example-based tests in `src/test.rs` include `test_happy_path`, `test_double_init_fails`, `test_dispute_and_refund_to_payer`, `test_cancel_unfunded_milestone`, `test_cancel_funded_milestone_fails_with_invalid_state_transition`, `test_get_agreement`, `test_get_milestone_unknown_agreement_returns_none`, `test_batch_lock_funds_partial_failure`, and the six `*_wrong_role_fails` authorization tests.
 
 ![Contract tests](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/Trellis-Ecosystem/trellis/master/.github/badges/contract-tests.json)
 

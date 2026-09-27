@@ -564,6 +564,22 @@ impl TrellisContract {
     /// Returns `None` if the agreement does not exist or `milestone_id` is out
     /// of range — both map to the same observable absence from the caller's
     /// perspective.
+    ///
+    /// # Return type
+    /// The two `None` cases are deliberately *not* distinguished, and callers
+    /// should not try to. A missing agreement and a missing milestone are both
+    /// "there is no milestone at this position", and splitting them would mean
+    /// either leaking agreement existence through a read-only view or adding an
+    /// error variant that no caller can act on differently.
+    ///
+    /// Callers that need to tell them apart should use
+    /// [`Self::get_agreement`] first: it returns
+    /// [`TrellisError::AgreementNotFound`] for a missing ID, so
+    /// `get_agreement(..).is_err()` disambiguates without any API change here.
+    ///
+    /// Both paths are covered separately in `test.rs`
+    /// (`test_get_milestone_unknown_agreement_returns_none` for the storage miss,
+    /// `test_get_milestone_invalid_id_returns_none` for the vector miss).
     pub fn get_milestone(
         env: Env,
         agreement_id: BytesN<32>,
