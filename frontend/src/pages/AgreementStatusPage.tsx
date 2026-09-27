@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { useParams } from 'react-router-dom'
+import { useNavigate, useParams } from 'react-router-dom'
 import { addToHistory } from '../lib/history'
 import { isValidHexAgreementId } from '../lib/agreementId'
 import { useAgreement } from '../hooks/useAgreement'
@@ -8,9 +8,18 @@ import EventFeed from '../components/EventFeed'
 
 function AgreementStatusPage() {
   const { id } = useParams<{ id: string }>()
+  const navigate = useNavigate()
+  // The URL is the source of truth for which agreement is shown, so
+  // bookmarks, shared links and back/forward navigation all work.
+  const queriedId = id || null
   const [searchId, setSearchId] = useState(id || '')
-  const [queriedId, setQueriedId] = useState<string | null>(id || null)
   const [validationError, setValidationError] = useState<string | null>(null)
+
+  // Keep the search box in sync when the URL changes (e.g. back button).
+  useEffect(() => {
+    setSearchId(id || '')
+    setValidationError(null)
+  }, [id])
 
   const { agreement, isLoading, isError, error, refetch } = useAgreement(queriedId)
 
@@ -31,7 +40,7 @@ function AgreementStatusPage() {
       return
     }
     setValidationError(null)
-    setQueriedId(trimmed)
+    navigate(`/agreement/${trimmed}`)
   }
 
   const handleKeyPress = (e: React.KeyboardEvent) => {

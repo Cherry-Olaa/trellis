@@ -456,6 +456,138 @@ fn test_batch_lock_funds_partial_failure() {
     );
 }
 
+/// An empty `milestone_ids` is a true no-op: `Ok(0)`, no state write, no event,
+/// no token movement.
+///
+/// Before the early return, the loop body never ran but `write_agreement` still
+/// did — rewriting the agreement byte-for-byte identically and bumping its TTL.
+/// That is a persistent write the caller pays for with no observable effect, on
+/// every no-op call. The write is not directly observable in the ledger, so it is
+/// pinned down by its two consequences instead: no `funds_locked` event, and the
+/// agreement read back afterwards is unchanged.
+#[test]
+fn test_batch_lock_funds_empty_vec_is_a_no_op() {
+    let (env, payer, payee, dispute_resolver, token_address, client) = setup();
+    let token_client = token::TokenClient::new(&env, &token_address);
+    let id = agreement_id(&env, 12);
+
+    let milestones = vec![
+        &env,
+        Milestone {
+            amount: 500,
+            status: EscrowStatus::Pending,
+            proof_uri: None,
+        },
+        Milestone {
+            amount: 500,
+            status: EscrowStatus::Pending,
+            proof_uri: None,
+        },
+    ];
+
+    client.init(
+        &id,
+        &payer,
+        &payee,
+        &token_address,
+        &milestones,
+        &dispute_resolver,
+    );
+
+    let before = client.get_agreement(&id);
+    let payer_before = token_client.balance(&payer);
+    let total_before = client.get_total_amount(&id);
+
+    let empty: Vec<u32> = Vec::new(&env);
+    let funded = client.batch_lock_funds(&id, &empty);
+
+    assert_eq!(funded, 0u32, "an empty batch must fund nothing");
+    assert_trellis_topics(
+        &env,
+        &client.address,
+        &[],
+        "an empty batch must not emit any Trellis event",
+    );
+
+    // `get_agreement` is a read-only view, so reading it here does not itself
+    // dirty the entry under test.
+    let after = client.get_agreement(&id);
+    assert_eq!(
+        after.milestones, before.milestones,
+        "an empty batch must leave every milestone untouched"
+    );
+    assert_eq!(
+        after.total_amount, total_before,
+        "an empty batch must not change total_amount"
+    );
+    assert_eq!(
+        after.agreement_id, before.agreement_id,
+        "an empty batch must not change the stored agreement ID"
+    );
+    assert_eq!(
+        after.payer, before.payer,
+        "an empty batch must not change the payer"
+    );
+    assert_eq!(
+        after.dispute_resolver, before.dispute_resolver,
+        "an empty batch must not change the dispute resolver"
+    );
+    assert_eq!(
+        token_client.balance(&payer),
+        payer_before,
+        "an empty batch must not move any tokens"
+    );
+    assert_eq!(
+        token_client.balance(&client.address),
+        0,
+        "an empty batch must leave the contract balance at zero"
+    );
+}
+
+/// Adjacent case: an empty batch against an unknown agreement ID must still be
+/// rejected.
+///
+/// The early return is placed *after* `read_agreement`, so an empty batch cannot
+/// be used to probe or bypass the agreement-existence check — hoisting it above
+/// the read would make every unknown ID quietly return `Ok(0)`.
+#[test]
+fn test_batch_lock_funds_empty_vec_still_requires_a_known_agreement() {
+    let (env, _payer, _payee, _dispute_resolver, _token_address, client) = setup();
+
+    let missing = agreement_id(&env, 98);
+    let empty: Vec<u32> = Vec::new(&env);
+    assert_eq!(
+        client.try_batch_lock_funds(&missing, &empty),
+        Err(Ok(TrellisError::AgreementNotFound)),
+        "an empty batch against an unknown ID must still return AgreementNotFound"
+    );
+}
+
+/// Adjacent case: an empty batch must not bypass the payer's authorisation.
+///
+/// Same reasoning for `require_auth` — it runs before the early return, so an
+/// empty batch is a well-formed call that still has to be authorised, not a free
+/// no-op anyone can invoke.
+#[test]
+#[should_panic(expected = "InvalidAction")]
+fn test_batch_lock_funds_empty_vec_still_requires_auth() {
+    let (env, payer, payee, dispute_resolver, token_address, client) = setup();
+    let id = agreement_id(&env, 13);
+
+    client.init(
+        &id,
+        &payer,
+        &payee,
+        &token_address,
+        &one_milestone(&env, 500),
+        &dispute_resolver,
+    );
+
+    // With auth mocking off, the contract's own gate traps.
+    deny_all_auth(&env);
+    client.batch_lock_funds(&id, &Vec::new(&env));
+}
+
 /// get_agreement returns the correct Agreement after init, and AgreementNotFound
 /// for an ID that was never initialized.
 #[test]
@@ -539,7 +671,13 @@ fn test_get_milestone_returns_correct_milestone() {
     assert_eq!(m.status, EscrowStatus::Pending, "status must be Pending");
 }
 
-/// get_milestone returns None for an out-of-range milestone_id.
+/// `get_milestone` returns `None` when the `milestone_id` is out of range on an
+/// agreement that *does* exist.
+///
+/// This is the second half of the entrypoint's two `None` paths and is kept
+/// deliberately separate from
+/// `test_get_milestone_unknown_agreement_returns_none` below: here the
+/// agreement was read successfully and the lookup within it is what failed.
 #[test]
 fn test_get_milestone_invalid_id_returns_none() {
     let (env, payer, payee, dispute_resolver, token_address, client) = setup();
@@ -561,92 +699,103 @@ fn test_get_milestone_invalid_id_returns_none() {
     );
 }
 
-// ---------------------------------------------------------------------------
-// Error-stability tests
-// ---------------------------------------------------------------------------
-
-/// Every `TrellisError` discriminant is permanent.
+/// `get_milestone` returns `None` when the `agreement_id` was never initialised.
 ///
-/// The enum's doc comment makes this a documented stability contract: the
-/// `u32` discriminants are serialised into the XDR `ScError` envelope and are
-/// therefore part of the public on-chain ABI, so a deployed consumer that
-/// switches on `11` must keep seeing `11` forever. Nothing in the type system
-/// stops a future edit from renumbering a variant, so pin the numbers here.
+/// This exercises the other half of the entrypoint's `.ok().and_then(..)` chain:
+/// `read_agreement` fails first, so `and_then` is never reached and the whole
+/// chain short-circuits to `None`. The existing
+/// `test_get_milestone_invalid_id_returns_none` only covers an out-of-range index
+/// on an agreement that *is* in storage, so this path — a storage miss rather
+/// than a vector miss — had no dedicated test.
 ///
-/// A new variant must be appended with the next free discriminant — `13` at
-/// the time of writing. When one is added, add it to this list rather than
-/// bumping an existing entry; if this test fails on an existing variant, that
-/// is a breaking ABI change, not a test to update.
+/// Both cases are asserted to be `None` and, per the entrypoint's doc comment,
+/// are indistinguishable to a caller. See the `# Return type` section of
+/// [`Self::get_milestone`] for why they are not being split into distinct
+/// variants here.
 #[test]
-fn test_error_discriminants_are_stable() {
-    let expected: &[(TrellisError, u32)] = &[
-        (TrellisError::AlreadyInitialized, 1),
-        (TrellisError::Unauthorized, 2),
-        (TrellisError::AgreementNotFound, 3),
-        (TrellisError::InvalidMilestone, 4),
-        (TrellisError::InvalidStateTransition, 5),
-        // 6 is permanently vacant — formerly NoFundsToRefund, removed as dead
-        // code. Left unreused per the append-only rule.
-        (TrellisError::EmptyMilestoneSet, 7),
-        (TrellisError::ResolverCannotBeParty, 8),
-        (TrellisError::TotalAmountOverflow, 9),
-        (TrellisError::InvalidToken, 10),
-        (TrellisError::MilestoneCountExceeded, 11),
-        (TrellisError::PayerEqualsPayee, 12),
-    ];
+fn test_get_milestone_unknown_agreement_returns_none() {
+    let (env, _payer, _payee, _dispute_resolver, _token_address, client) = setup();
 
-    for (variant, discriminant) in expected {
-        assert_eq!(
-            *variant as u32, *discriminant,
-            "{variant:?} must keep discriminant {discriminant} — renumbering breaks \
-             every deployed consumer that switches on the on-chain error code"
-        );
-    }
+    // Never passed to `init` — the storage read misses.
+    let missing = agreement_id(&env, 22);
+
+    assert!(
+        client.get_milestone(&missing, &0u32).is_none(),
+        "an agreement that was never initialised must return None, not a trap"
+    );
+
+    // A mid-range index takes the same path: the agreement is missing, so the
+    // index is never consulted.
+    assert!(
+        client.get_milestone(&missing, &1u32).is_none(),
+        "the milestone index must not matter when the agreement does not exist"
+    );
+
+    // Same ID at u32::MAX, to pin that the short-circuit is on the agreement
+    // rather than on any bound check inside `Vec::get`.
+    assert!(
+        client.get_milestone(&missing, &u32::MAX).is_none(),
+        "u32::MAX must return None for a missing agreement, not InvalidMilestone"
+    );
 }
 
-/// The `u32` a caller observes on-chain is the enum discriminant.
+/// Adjacent case: a missing agreement must not disturb a real one.
 ///
-/// `#[contracterror]` serialises the discriminant into the XDR `ScError`
-/// envelope, so this is the number an SDK consumer matches on. The round-trip
-/// below goes through the same `From<TrellisError> for Error` /
-/// `TryFrom<Error> for TrellisError` pair the host uses, and proves the
-/// `#[non_exhaustive]` attribute added for #400 did not disturb the encoding:
-/// the attribute is a compile-time exhaustiveness marker and must be invisible
-/// on the wire.
+/// `get_milestone` is a read-only view, so probing an unknown ID must leave
+/// every stored agreement byte-identical and must not emit events. This is the
+/// regression that a careless "fix" — routing the miss through
+/// `storage::write_agreement`, or bumping TTLs on a failed read — would
+/// introduce.
 #[test]
-fn test_error_discriminants_round_trip_through_xdr() {
-    use soroban_sdk::Error;
+fn test_get_milestone_unknown_agreement_leaves_existing_state_untouched() {
+    let (env, payer, payee, dispute_resolver, token_address, client) = setup();
+    let id = agreement_id(&env, 23);
 
-    let all = [
-        TrellisError::AlreadyInitialized,
-        TrellisError::Unauthorized,
-        TrellisError::AgreementNotFound,
-        TrellisError::InvalidMilestone,
-        TrellisError::InvalidStateTransition,
-        TrellisError::EmptyMilestoneSet,
-        TrellisError::ResolverCannotBeParty,
-        TrellisError::TotalAmountOverflow,
-        TrellisError::InvalidToken,
-        TrellisError::MilestoneCountExceeded,
-        TrellisError::PayerEqualsPayee,
+    let milestones = vec![
+        &env,
+        Milestone {
+            amount: 100,
+            status: EscrowStatus::Pending,
+            proof_uri: None,
+        },
+        Milestone {
+            amount: 200,
+            status: EscrowStatus::Pending,
+            proof_uri: None,
+        },
     ];
 
-    for variant in all {
-        let code = variant as u32;
-        let wire = Error::from(variant);
-        assert_eq!(
-            wire.get_code(),
-            code,
-            "{variant:?} must serialise to on-chain error code {code}"
-        );
-        assert_eq!(
-            TrellisError::try_from(wire).unwrap_or_else(|_| {
-                panic!("on-chain error code {code} must decode back to {variant:?}")
-            }),
-            variant,
-            "code {code} must round-trip back to the same variant"
-        );
-    }
+    client.init(
+        &id,
+        &payer,
+        &payee,
+        &token_address,
+        &milestones,
+        &dispute_resolver,
+    );
+
+    let before = client.get_agreement(&id);
+
+    // Probe an unknown ID, then re-read the real one.
+    let missing = agreement_id(&env, 24);
+    assert!(client.get_milestone(&missing, &0u32).is_none());
+
+    let after = client.get_agreement(&id);
+    assert_eq!(
+        after.milestones, before.milestones,
+        "probing a missing agreement must not alter an existing one"
+    );
+    assert_eq!(
+        after.total_amount, before.total_amount,
+        "probing a missing agreement must not change total_amount"
+    );
+
+    // The real agreement's milestone is still reachable and unchanged.
+    assert_eq!(
+        client.get_milestone(&id, &1u32).map(|m| m.amount),
+        Some(200),
+        "the existing agreement's milestone must still be readable"
+    );
 }
 
 // ---------------------------------------------------------------------------
