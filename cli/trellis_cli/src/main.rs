@@ -5,6 +5,10 @@ mod rpc;
 mod sanitizer;
 mod utils;
 
+#[cfg(test)]
+#[path = "../sdk_compat.rs"]
+mod sdk_compat;
+
 use clap::{CommandFactory, Parser};
 use commands::{Commands, OutputFormat, OutputOpts};
 use config::Network;
@@ -36,9 +40,16 @@ use std::process;
     // still shows the bare crate version above. Includes the on-chain
     // contract's soroban-sdk compatibility range so bug reports carry
     // enough environment context without a separate lookup.
+    //
+    // COUPLING: the range is not hardcoded — `build.rs` reads it from the
+    // `soroban-sdk` entry in contracts/trellis_core/Cargo.toml and fails the
+    // build if it cannot be found, so a contract SDK bump is picked up here
+    // automatically.
     long_version = concat!(
         env!("CARGO_PKG_VERSION"),
-        "\nsoroban-sdk compat: >=22.0.0, <23 (see contracts/trellis_core/Cargo.toml)",
+        "\nsoroban-sdk compat: ",
+        env!("TRELLIS_SOROBAN_SDK_COMPAT"),
+        " (see contracts/trellis_core/Cargo.toml)",
     ),
     author,
     about,
@@ -234,5 +245,27 @@ fn main() {
             eprintln!("{msg}");
         }
         process::exit(1);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn long_version_reports_manifest_sdk_range() {
+        let rendered = Cli::command().render_long_version();
+        let expected = format!(
+            "soroban-sdk compat: {} (see contracts/trellis_core/Cargo.toml)",
+            env!("TRELLIS_SOROBAN_SDK_COMPAT")
+        );
+        assert!(rendered.contains(&expected), "got: {rendered}");
+    }
+
+    #[test]
+    fn short_version_stays_bare() {
+        let rendered = Cli::command().render_version();
+        assert!(!rendered.contains("soroban-sdk"), "got: {rendered}");
+        assert!(rendered.contains(env!("CARGO_PKG_VERSION")));
     }
 }
