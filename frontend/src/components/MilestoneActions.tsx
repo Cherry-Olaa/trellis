@@ -178,7 +178,11 @@ export default function MilestoneActions({ milestone, agreement, onSuccess }: Mi
     })
   }
 
-  if ((milestone.status === 'Funded' || milestone.status === 'WorkSubmitted') && wallet.connected) {
+  const isDisputable = milestone.status === 'Funded' || milestone.status === 'WorkSubmitted'
+  // raise_dispute rejects any caller other than the payer or payee.
+  const isUserParty = isUserPayer || isUserPayee
+
+  if (isDisputable && wallet.connected && isUserParty) {
     actions.push({
       label: 'Dispute',
       action: () => setShowConfirm('dispute'),
@@ -187,6 +191,13 @@ export default function MilestoneActions({ milestone, agreement, onSuccess }: Mi
   }
 
   if (actions.length === 0) {
+    if (isDisputable && wallet.connected && !isUserParty) {
+      return (
+        <span className="text-gray-500 dark:text-gray-500 light:text-gray-600 text-xs">
+          Only the payer or payee can act on this milestone.
+        </span>
+      )
+    }
     return <span className="text-gray-500 dark:text-gray-500 light:text-gray-600 text-sm">—</span>
   }
 

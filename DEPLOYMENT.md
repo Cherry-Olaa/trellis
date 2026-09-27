@@ -177,6 +177,9 @@ trellis raise-dispute \
 
 > Can be called by either the payer or the payee
 
+In the web UI, the Dispute button only appears when the connected wallet is the
+agreement's payer or payee; any other wallet sees an explanatory note instead.
+
 ### Resolve a dispute
 
 ```bash
