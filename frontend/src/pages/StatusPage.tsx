@@ -8,7 +8,8 @@ import { useAgreementEvents } from '../hooks/useAgreementEvents';
 import { ExplorerLink } from '../components/ExplorerLink';
 import MilestoneRow from '../components/MilestoneRow';
 import MilestoneCard from '../components/MilestoneCard';
-import StatsBar from '../components/StatsBar';
+import LastUpdated from '../components/LastUpdated';
+import { ExplorerLink } from '../components/ExplorerLink';
 import { AgreementCardSkeleton } from '../components/skeletons';
 
 export default function StatusPage() {
@@ -137,7 +138,7 @@ export default function StatusPage() {
             {/* Timestamp of last on-chain data refresh — locale-independent (issue #101). */}
             {lastUpdated && (
               <div className="mb-4 flex justify-end">
-                <StatsBar lastUpdated={lastUpdated} />
+                <LastUpdated lastUpdated={lastUpdated} />
               </div>
             )}
 

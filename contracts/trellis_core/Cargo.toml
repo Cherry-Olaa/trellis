@@ -19,6 +19,10 @@ crate-type = ["cdylib", "rlib"]
 # Deploying the compiled WASM requires a `stellar` CLI build that supports the
 # soroban-sdk 22.x host environment — see DEPLOYMENT.md's Prerequisites for
 # the version this repo has been verified against.
+#
+# COUPLING: cli/trellis_cli/build.rs reads the soroban-sdk requirement below
+# (the [dependencies] entry) and embeds it in `trellis --version`. Keep it on a
+# single line; the CLI build fails if the entry cannot be found.
 [dependencies]
 soroban-sdk = { version = ">=22.0.0, <23", features = ["alloc"] }
 
