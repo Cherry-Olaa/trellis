@@ -200,6 +200,186 @@ fn test_happy_path() {
     );
 }
 
+/// Exploit path (#382): `init` must reject a milestone pre-set to any status
+/// other than `Pending`.
+///
+/// Every agreement sharing a token draws from one pooled contract balance.
+/// A caller controlling all three roles (payer, payee, resolver) could
+/// otherwise `init` an agreement with a phantom `WorkSubmitted` milestone and
+/// call `approve_and_release` immediately, or a phantom `Disputed` one and
+/// call `resolve_dispute` — either transfers tokens out of the shared pool
+/// that were never escrowed for that milestone.
+///
+/// Each non-Pending status is checked individually because they are the ones
+/// that reach a fund-moving entrypoint; `Completed` and `Refunded` are inert
+/// dead ends, but are rejected too so the invariant stays "Pending only".
+#[test]
+fn test_init_rejects_non_pending_initial_milestone_status() {
+    // WorkSubmitted → approve_and_release; Disputed → resolve_dispute.
+    // Those two are the actual drain vectors; the rest complete the set.
+    let forbidden = [
+        EscrowStatus::Funded,
+        EscrowStatus::WorkSubmitted,
+        EscrowStatus::Completed,
+        EscrowStatus::Disputed,
+        EscrowStatus::Refunded,
+    ];
+
+    for (i, status) in forbidden.iter().enumerate() {
+        let (env, payer, payee, dispute_resolver, token_address, client) = setup();
+        // Distinct seed per status keeps failures attributable.
+        let id = agreement_id(&env, 100 + i as u8);
+        let milestones = vec![
+            &env,
+            Milestone {
+                amount: 1_000,
+                status: status.clone(),
+                proof_uri: None,
+            },
+        ];
+
+        env.mock_all_auths();
+        let result = client.try_init(
+            &id,
+            &payer,
+            &payee,
+            &token_address,
+            &milestones,
+            &dispute_resolver,
+        );
+
+        assert_eq!(
+            result,
+            Err(Ok(TrellisError::InvalidInitialMilestoneStatus)),
+            "init must reject a milestone initialised as {status:?} — it is a \
+             claim on pooled funds that were never escrowed for it"
+        );
+
+        // The rejected init must not have written anything to storage,
+        // otherwise the phantom agreement would still be reachable.
+        assert!(
+            client.try_get_agreement(&id).is_err(),
+            "a rejected init must not persist an agreement for {status:?}"
+        );
+    }
+}
+
+/// Adjacent case (#382): one non-Pending milestone poisons the whole `init`.
+///
+/// This is what regresses if the check is written to coerce offending
+/// milestones back to `Pending` instead of rejecting them — the drain would
+/// be closed, but the caller would silently receive an agreement whose
+/// declared state was rewritten. Rejecting atomically surfaces the bug to
+/// the integrator instead of hiding it.
+#[test]
+fn test_init_rejects_whole_set_when_one_milestone_is_not_pending() {
+    let (env, payer, payee, dispute_resolver, token_address, client) = setup();
+    let id = agreement_id(&env, 120);
+
+    // Two valid Pending milestones around one phantom Funded one.
+    let milestones = vec![
+        &env,
+        Milestone {
+            amount: 1_000,
+            status: EscrowStatus::Pending,
+            proof_uri: None,
+        },
+        Milestone {
+            amount: 2_000,
+            status: EscrowStatus::Funded,
+            proof_uri: None,
+        },
+        Milestone {
+            amount: 3_000,
+            status: EscrowStatus::Pending,
+            proof_uri: None,
+        },
+    ];
+
+    env.mock_all_auths();
+    let result = client.try_init(
+        &id,
+        &payer,
+        &payee,
+        &token_address,
+        &milestones,
+        &dispute_resolver,
+    );
+
+    assert_eq!(
+        result,
+        Err(Ok(TrellisError::InvalidInitialMilestoneStatus)),
+        "one non-Pending milestone must reject the entire init, not be coerced"
+    );
+    assert!(
+        client.try_get_agreement(&id).is_err(),
+        "a partially-valid milestone set must not be persisted"
+    );
+}
+
+/// Adjacent case (#382): the legitimate happy path is untouched, and the
+/// agreement created under the new invariant stays fully usable.
+///
+/// Guards against the new validation being over-eager — rejecting a
+/// legitimate `Pending` milestone, breaking the existing amount checks, or
+/// writing the agreement in a state that blocks the normal escrow flow.
+#[test]
+fn test_init_accepts_pending_milestones_happy_path() {
+    let (env, payer, payee, dispute_resolver, token_address, client) = setup();
+    let id = agreement_id(&env, 121);
+    let token_client = token::TokenClient::new(&env, &token_address);
+    let payer_before = token_client.balance(&payer);
+
+    let milestones = vec![
+        &env,
+        Milestone {
+            amount: 1_000,
+            status: EscrowStatus::Pending,
+            proof_uri: None,
+        },
+        Milestone {
+            amount: 2_000,
+            status: EscrowStatus::Pending,
+            proof_uri: None,
+        },
+    ];
+
+    env.mock_all_auths();
+    client.init(
+        &id,
+        &payer,
+        &payee,
+        &token_address,
+        &milestones,
+        &dispute_resolver,
+    );
+
+    let agreement = client.get_agreement(&id);
+    assert_eq!(agreement.total_amount, 3_000);
+    assert!(
+        agreement.milestones.iter().all(|m| m.status == EscrowStatus::Pending),
+        "all milestones should be stored as Pending"
+    );
+    // init must still move no tokens — it only records the agreement.
+    assert_eq!(
+        token_client.balance(&payer),
+        payer_before,
+        "init must not move any tokens"
+    );
+    assert_eq!(token_client.balance(&client.address), 0);
+
+    // The normal lock → submit → release path still completes, proving the
+    // invariant does not block legitimate escrow.
+    env.mock_all_auths();
+    client.lock_funds(&id, &0u32);
+    assert_eq!(token_client.balance(&client.address), 1_000);
+
+    client.submit_work(&id, &0u32, &None);
+    client.approve_and_release(&id, &0u32);
+    assert_eq!(token_client.balance(&payee), 1_000);
+    assert_eq!(token_client.balance(&client.address), 0);
+}
+
 /// Calling `init` twice with the same agreement_id must return AlreadyInitialized.
 #[test]
 fn test_double_init_fails() {
