@@ -636,6 +636,12 @@ trellis status --agreement-id <hex-id> --quiet
 trellis status --agreement-id <hex-id> --human-readable   # or -H
 ```
 
+`--dry-run` prints the `stellar contract invoke` command that would be executed
+without actually running it or submitting anything on-chain. Because it never
+spawns the `stellar` binary, it works on machines where the Stellar CLI is not
+installed — useful for previewing command construction in CI or on a fresh
+checkout.
+
 `--json` takes priority over `--human-readable` when both are passed.
 
 #### Shell Completions

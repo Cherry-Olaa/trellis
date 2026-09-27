@@ -156,10 +156,19 @@ fn main() {
         return;
     }
 
-    // ── #68: Validate stellar binary at startup ────────────────────────────
-    if let Err(msg) = validate_environment() {
-        eprintln!("{msg}");
-        process::exit(1);
+    // ── #406: Skip stellar-binary check for --dry-run ─────────────────────
+    // --dry-run only prints the command that would run; it never spawns the
+    // stellar binary itself.  Requiring the binary here blocks a legitimate
+    // use-case: previewing command construction on a machine where the
+    // stellar CLI is not (yet) installed, or in CI environments that only
+    // need to inspect the generated invocation.
+    //
+    // ── #68: Validate stellar binary at startup (non-dry-run only) ────────
+    if !cli.dry_run {
+        if let Err(msg) = validate_environment() {
+            eprintln!("{msg}");
+            process::exit(1);
+        }
     }
 
     // ── #80: Resolve config from --network preset + CLI / env overrides ───
