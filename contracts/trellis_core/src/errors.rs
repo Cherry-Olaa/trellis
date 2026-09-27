@@ -17,9 +17,25 @@ use soroban_sdk::contracterror;
 /// codepath ever returned it. Discriminant `6` is left vacant rather than
 /// reused, per the append-only rule above. SDK consumers pinned to the old
 /// numbering must regenerate their bindings.
+///
+/// # Exhaustiveness
+/// `#[non_exhaustive]` is what makes the append-only rule above enforceable by
+/// the compiler rather than by convention. Without it, any downstream `match`
+/// over `TrellisError` that enumerates the current variants is accepted today
+/// and becomes a hard compile error the next time a variant is appended —
+/// turning a documented stability guarantee into a breaking change for
+/// consumers. With it, downstream matches are required to carry a wildcard arm
+/// from the start, so appending a variant stays non-breaking.
+///
+/// This is the same treatment [`crate::types::EscrowStatus`] already has, and
+/// for the same reason: both are append-only enums in the public ABI. No `match`
+/// inside this crate is exhaustive over `TrellisError` (every site either
+/// constructs an error or compares against one), so the attribute costs
+/// nothing here.
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 #[repr(u32)]
+#[non_exhaustive]
 pub enum TrellisError {
     /// The contract or agreement has already been initialised.
     /// Prevents duplicate `create_agreement` calls for the same ID.
@@ -45,7 +61,6 @@ pub enum TrellisError {
     // on a milestone that has left `Pending` is a state machine violation
     // ([`TrellisError::InvalidStateTransition`]), not a distinct economic
     // one. Left vacant rather than reused, per the append-only rule above.
-
     /// `init` was called with an empty `milestones` vector. An agreement with
     /// no milestones can never transition through any state, permanently
     /// wasting the storage it occupies.
