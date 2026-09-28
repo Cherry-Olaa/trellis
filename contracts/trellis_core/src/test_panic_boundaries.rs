@@ -163,8 +163,11 @@ fn unknown_agreement_id_never_panics() {
         client.try_get_agreement(&missing),
         Err(Ok(TrellisError::AgreementNotFound))
     );
-    // Option-returning view: absence, not a trap.
-    assert_eq!(client.try_get_milestone(&missing, &0), Ok(Ok(None)));
+    // A missing agreement is a typed error here, not a silent `None`.
+    assert_eq!(
+        client.try_get_milestone(&missing, &0),
+        Err(Ok(TrellisError::AgreementNotFound))
+    );
 }
 
 #[test]
@@ -199,6 +202,7 @@ fn out_of_range_milestone_index_never_panics() {
         client.try_cancel_unfunded_milestone(&id, &oob),
         Err(Ok(TrellisError::InvalidMilestone))
     );
+    // Existing agreement, out-of-range index: `Ok(None)`, not a trap.
     assert!(matches!(client.try_get_milestone(&id, &oob), Ok(Ok(None))));
 }
 

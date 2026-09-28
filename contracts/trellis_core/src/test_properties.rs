@@ -541,7 +541,7 @@ proptest! {
                 }
                 FuzzOp::Cancel => {
                     client.cancel_unfunded_milestone(&id, &mid);
-                    status[i] = EscrowStatus::Refunded;
+                    status[i] = EscrowStatus::Cancelled;
                 }
             }
 

@@ -228,9 +228,12 @@ export default function MilestoneActions({ milestone, agreement, onSuccess }: Mi
       {/* Proof URI Input */}
       {showProofInput && (
         <div className="space-y-2 p-3 bg-navy-700 dark:bg-navy-700 light:bg-gray-100 rounded">
+          {/* maxLength mirrors the contract's MAX_PROOF_URI_LEN (512 bytes) —
+              longer proofs are rejected on-chain with ProofUriTooLong. */}
           <input
             type="text"
             placeholder="Proof URI (optional, e.g., GitHub PR, IPFS link)"
+            maxLength={512}
             value={proofUri}
             onChange={(e) => setProofUri(e.target.value)}
             className="w-full px-3 py-2 bg-navy-800 dark:bg-navy-800 light:bg-white border border-navy-600 dark:border-navy-600 light:border-gray-300 text-white dark:text-white light:text-gray-900 text-sm rounded focus:outline-none focus:border-cyan-400"

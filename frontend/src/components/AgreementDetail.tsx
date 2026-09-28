@@ -121,6 +121,7 @@ function getStatusColor(status: string): string {
     Completed: 'bg-green-600 text-white',
     Disputed: 'bg-red-600 text-white',
     Refunded: 'bg-gray-500 text-white',
+    Cancelled: 'bg-slate-500 text-white',
   }
   return colors[status] || 'bg-gray-600 text-white'
 }

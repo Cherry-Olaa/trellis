@@ -101,4 +101,12 @@ pub enum TrellisError {
     /// integrator can tell "you sent a bad amount" from "you tried to
     /// pre-advance a milestone".
     InvalidInitialMilestoneStatus = 11,
+
+    /// `submit_work` was called with a `proof_uri` longer than the contract's
+    /// `MAX_PROOF_URI_LEN` (512 bytes). Proof URIs are stored verbatim in the
+    /// agreement's persistent entry, so an unbounded length would let a payee
+    /// permanently inflate the agreement's storage footprint and rent.
+    ///
+    /// Appended as discriminant `12` per the stability rule above.
+    ProofUriTooLong = 12,
 }

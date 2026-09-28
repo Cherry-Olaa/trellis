@@ -198,7 +198,7 @@ test_cancel_unfunded_milestone() {
   assert_eq "cancel-milestone: status success" "success" "$(echo "$out" | jq -r .status)"
 
   out=$(TRELLIS_SOURCE_KEY=payer "$CLI_BIN" --json milestone-status --agreement-id "$id" --milestone-id 0 2>&1)
-  assert_eq "milestone-status: refunded after cancel" "Refunded" "$(echo "$out" | jq -r .result.status)"
+  assert_eq "milestone-status: cancelled after cancel" "Cancelled" "$(echo "$out" | jq -r .result.status)"
 }
 
 test_error_paths() {

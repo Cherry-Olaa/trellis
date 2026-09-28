@@ -21,7 +21,7 @@ pub const MAX_AGREEMENT_ID_LEN: usize = 64;
 ///
 /// Generous enough for an `ipfs://` CID or a long HTTPS URL with query
 /// parameters, but bounded so it cannot bloat the contract payload.
-pub const MAX_PROOF_URI_LEN: usize = 2048;
+pub const MAX_PROOF_URI_LEN: usize = 512;
 
 /// Maximum length of a Stellar strkey address (`G…`, `C…`, `S…`, named
 /// identities). Every strkey encodes to 56 base-32 characters.
@@ -88,13 +88,13 @@ mod tests {
 
     #[test]
     fn proof_uri_oversized_rejected() {
-        let err = validate_proof_uri_len(&"x".repeat(2049)).unwrap_err();
-        assert!(err.contains("exceeds maximum length of 2048 characters"));
+        let err = validate_proof_uri_len(&"x".repeat(513)).unwrap_err();
+        assert!(err.contains("exceeds maximum length of 512 characters"));
     }
 
     #[test]
     fn proof_uri_max_ok() {
-        assert!(validate_proof_uri_len(&"x".repeat(2048)).is_ok());
+        assert!(validate_proof_uri_len(&"x".repeat(512)).is_ok());
     }
 
     #[test]

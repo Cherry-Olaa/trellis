@@ -59,7 +59,7 @@
               "function_name": "init",
               "args": [
                 {
-                  "bytes": "0404040404040404040404040404040404040404040404040404040404040404"
+                  "bytes": "1616161616161616161616161616161616161616161616161616161616161616"
                 },
                 {
                   "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM"
@@ -81,7 +81,7 @@
                           "val": {
                             "i128": {
                               "hi": 0,
-                              "lo": 300
+                              "lo": 100
                             }
                           }
                         },
@@ -117,28 +117,7 @@
         }
       ]
     ],
-    [
-      [
-        "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
-        {
-          "function": {
-            "contract_fn": {
-              "contract_address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMDR4",
-              "function_name": "cancel_unfunded_milestone",
-              "args": [
-                {
-                  "bytes": "0404040404040404040404040404040404040404040404040404040404040404"
-                },
-                {
-                  "u32": 0
-                }
-              ]
-            }
-          },
-          "sub_invocations": []
-        }
-      ]
-    ],
+    [],
     [],
     []
   ],
@@ -249,39 +228,6 @@
       [
         {
           "contract_data": {
-            "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
-            "key": {
-              "ledger_key_nonce": {
-                "nonce": 4837995959683129791
-              }
-            },
-            "durability": "temporary"
-          }
-        },
-        [
-          {
-            "last_modified_ledger_seq": 0,
-            "data": {
-              "contract_data": {
-                "ext": "v0",
-                "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
-                "key": {
-                  "ledger_key_nonce": {
-                    "nonce": 4837995959683129791
-                  }
-                },
-                "durability": "temporary",
-                "val": "void"
-              }
-            },
-            "ext": "v0"
-          },
-          6311999
-        ]
-      ],
-      [
-        {
-          "contract_data": {
             "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAITA4",
             "key": {
               "ledger_key_nonce": {
@@ -322,7 +268,7 @@
                   "symbol": "Agreement"
                 },
                 {
-                  "bytes": "0404040404040404040404040404040404040404040404040404040404040404"
+                  "bytes": "1616161616161616161616161616161616161616161616161616161616161616"
                 }
               ]
             },
@@ -342,7 +288,7 @@
                       "symbol": "Agreement"
                     },
                     {
-                      "bytes": "0404040404040404040404040404040404040404040404040404040404040404"
+                      "bytes": "1616161616161616161616161616161616161616161616161616161616161616"
                     }
                   ]
                 },
@@ -354,7 +300,7 @@
                         "symbol": "agreement_id"
                       },
                       "val": {
-                        "bytes": "0404040404040404040404040404040404040404040404040404040404040404"
+                        "bytes": "1616161616161616161616161616161616161616161616161616161616161616"
                       }
                     },
                     {
@@ -380,7 +326,7 @@
                                 "val": {
                                   "i128": {
                                     "hi": 0,
-                                    "lo": 300
+                                    "lo": 100
                                   }
                                 }
                               },
@@ -397,7 +343,7 @@
                                 "val": {
                                   "vec": [
                                     {
-                                      "symbol": "Cancelled"
+                                      "symbol": "Pending"
                                     }
                                   ]
                                 }
@@ -438,7 +384,7 @@
                       "val": {
                         "i128": {
                           "hi": 0,
-                          "lo": 300
+                          "lo": 100
                         }
                       }
                     }
