@@ -113,6 +113,7 @@
 **Trustless, milestone-based escrow for freelance and remote work — built on Stellar's Soroban smart contract platform.**
 
 [![Contract CI](https://github.com/Trellis-Ecosystem/trellis/actions/workflows/contract-ci.yml/badge.svg)](https://github.com/Trellis-Ecosystem/trellis/actions/workflows/contract-ci.yml)
+[![Testnet E2E](https://github.com/Trellis-Ecosystem/trellis/actions/workflows/e2e-testnet.yml/badge.svg)](https://github.com/Trellis-Ecosystem/trellis/actions/workflows/e2e-testnet.yml)
 [![Frontend CI](https://github.com/Trellis-Ecosystem/trellis/actions/workflows/frontend-ci.yml/badge.svg)](https://github.com/Trellis-Ecosystem/trellis/actions/workflows/frontend-ci.yml)
 [![npm audit](https://github.com/Trellis-Ecosystem/trellis/actions/workflows/npm-audit.yml/badge.svg)](https://github.com/Trellis-Ecosystem/trellis/actions/workflows/npm-audit.yml)
 [![CodeQL](https://github.com/Trellis-Ecosystem/trellis/actions/workflows/codeql-analysis.yml/badge.svg)](https://github.com/Trellis-Ecosystem/trellis/actions/workflows/codeql-analysis.yml)
@@ -179,11 +180,11 @@ A live test agreement exists on-chain and is queryable right now:
 trellis status --agreement-id 0101010101010101010101010101010101010101010101010101010101010101
 ```
 
-| Attribute | Value |
-|---|---|
-| **Contract ID** | `CAUAO7CYKULE2K4EJMQ6LLRUHP7Y7JYOH6G2VBXKYG7PTETE3UZ3DU7Q` |
-| **Network** | Stellar Testnet |
-| **Explorer** | [View on Stellar Lab](https://lab.stellar.org/r/testnet/contract/CAUAO7CYKULE2K4EJMQ6LLRUHP7Y7JYOH6G2VBXKYG7PTETE3UZ3DU7Q) |
+| Attribute       | Value                                                                                                                      |
+| --------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| **Contract ID** | `CAUAO7CYKULE2K4EJMQ6LLRUHP7Y7JYOH6G2VBXKYG7PTETE3UZ3DU7Q`                                                                 |
+| **Network**     | Stellar Testnet                                                                                                            |
+| **Explorer**    | [View on Stellar Lab](https://lab.stellar.org/r/testnet/contract/CAUAO7CYKULE2K4EJMQ6LLRUHP7Y7JYOH6G2VBXKYG7PTETE3UZ3DU7Q) |
 
 > Full deployment details, every verified command, and step-by-step deployment instructions are in [DEPLOYMENT.md](./DEPLOYMENT.md).
 
@@ -352,10 +353,10 @@ Trellis models a freelance engagement as an **agreement** made up of one or more
 
 ### The Roles
 
-| Role | Responsibility |
-|---|---|
-| **Payer** 🧑‍💼 | Funds milestones and approves completed work |
-| **Payee** 👨‍💻 | Submits proof of completed work and receives payment on approval |
+| Role                    | Responsibility                                                                 |
+| ----------------------- | ------------------------------------------------------------------------------ |
+| **Payer** 🧑‍💼            | Funds milestones and approves completed work                                   |
+| **Payee** 👨‍💻            | Submits proof of completed work and receives payment on approval               |
 | **Dispute Resolver** ⚖️ | A neutral third party who can rule on disputes, releasing funds to either side |
 
 ### The Guarantees
@@ -472,18 +473,18 @@ Trellis is a monorepo with three layers:
 
 ### Contract Entrypoints
 
-| Function | Caller | Effect |
-|---|---|---|
-| `init` | Payer | Creates a new agreement with one or more milestones (each `amount` must be strictly positive) |
-| `lock_funds` | Payer | Deposits funds for a milestone into the contract |
-| `submit_work` | Payee | Submits proof of completed work for a funded milestone |
-| `approve_and_release` | Payer | Approves submitted work, releases funds to payee |
-| `raise_dispute` | Payer or Payee | Flags a milestone for resolver review |
-| `resolve_dispute` | Dispute Resolver | Rules on a dispute — refunds payer or pays payee |
-| `cancel_unfunded_milestone` | Payer | Cancels a milestone that was never funded |
-| `get_agreement` | Anyone | Returns the full current state of an agreement (read-only) |
-| `get_total_amount` | Anyone | Returns the agreement's total value — sum of all milestone amounts (read-only) |
-| `extend_agreement_ttl` | Anyone | Renews an agreement's ledger TTL to avoid archival |
+| Function                    | Caller           | Effect                                                                                        |
+| --------------------------- | ---------------- | --------------------------------------------------------------------------------------------- |
+| `init`                      | Payer            | Creates a new agreement with one or more milestones (each `amount` must be strictly positive) |
+| `lock_funds`                | Payer            | Deposits funds for a milestone into the contract                                              |
+| `submit_work`               | Payee            | Submits proof of completed work for a funded milestone                                        |
+| `approve_and_release`       | Payer            | Approves submitted work, releases funds to payee                                              |
+| `raise_dispute`             | Payer or Payee   | Flags a milestone for resolver review                                                         |
+| `resolve_dispute`           | Dispute Resolver | Rules on a dispute — refunds payer or pays payee                                              |
+| `cancel_unfunded_milestone` | Payer            | Cancels a milestone that was never funded                                                     |
+| `get_agreement`             | Anyone           | Returns the full current state of an agreement (read-only)                                    |
+| `get_total_amount`          | Anyone           | Returns the agreement's total value — sum of all milestone amounts (read-only)                |
+| `extend_agreement_ttl`      | Anyone           | Renews an agreement's ledger TTL to avoid archival                                            |
 
 <details>
 <summary>📦 <strong>Storage Lifetime</strong></summary>
@@ -495,12 +496,12 @@ Soroban archives persistent ledger entries once their TTL expires, so an agreeme
 
 <div align="center">
 
-| Category | Technologies |
-|---|---|
+| Category           | Technologies                                                                                                         |
+| ------------------ | -------------------------------------------------------------------------------------------------------------------- |
 | **Smart Contract** | [Soroban](https://developers.stellar.org/docs/build/smart-contracts) · soroban-sdk 22.x · Rust (`#![no_std]` → WASM) |
-| **CLI** | clap 4 · clap_complete · reqwest · serde + serde_json · dotenvy |
-| **Frontend** | React 19 · Vite · TypeScript · Tailwind CSS · React Router |
-| **Stellar SDK** | @stellar/stellar-sdk · @stellar/freighter-api · Soroban RPC |
+| **CLI**            | clap 4 · clap_complete · reqwest · serde + serde_json · dotenvy                                                      |
+| **Frontend**       | React 19 · Vite · TypeScript · Tailwind CSS · React Router                                                           |
+| **Stellar SDK**    | @stellar/stellar-sdk · @stellar/freighter-api · Soroban RPC                                                          |
 
 </div>
 
@@ -677,14 +678,14 @@ Supported shells: `bash`, `zsh`, `fish`, `elvish`, `powershell`.
 
 ### 🚧 Open for Contribution
 
-| Area | Description | Difficulty |
-|---|---|---|
-| Frontend — Agreement Status page | Polish and edge cases for live agreement state display | Intermediate |
-| Frontend — Create Agreement form | Validation UX, milestone builder refinements | Intermediate |
-| Frontend — Milestone actions | lock, submit, approve, dispute button workflows | Intermediate |
-| Frontend — Event feed enhancements | Real-time updates, filtering, pagination | Intermediate |
-| Native RPC client | Replace stellar CLI shell-out with native Rust HTTP client | Advanced |
-| Documentation | CONTRIBUTING.md and contributor onboarding guide | Beginner |
+| Area                               | Description                                                | Difficulty   |
+| ---------------------------------- | ---------------------------------------------------------- | ------------ |
+| Frontend — Agreement Status page   | Polish and edge cases for live agreement state display     | Intermediate |
+| Frontend — Create Agreement form   | Validation UX, milestone builder refinements               | Intermediate |
+| Frontend — Milestone actions       | lock, submit, approve, dispute button workflows            | Intermediate |
+| Frontend — Event feed enhancements | Real-time updates, filtering, pagination                   | Intermediate |
+| Native RPC client                  | Replace stellar CLI shell-out with native Rust HTTP client | Advanced     |
+| Documentation                      | CONTRIBUTING.md and contributor onboarding guide           | Beginner     |
 
 See [Issues](../../issues) for the full task list — each issue has exact requirements, acceptance criteria, a suggested branch name, and a timeframe.
 

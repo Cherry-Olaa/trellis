@@ -15,8 +15,14 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 CLI_BIN="$REPO_ROOT/target/release/trellis"
 WASM_PATH="$REPO_ROOT/target/wasm32-unknown-unknown/release/trellis_core.wasm"
-RPC_URL="http://localhost:8000/soroban/rpc"
-PASSPHRASE="Standalone Network ; February 2017"
+NETWORK="${TRELLIS_E2E_NETWORK:-local}"
+if [ "$NETWORK" = "testnet" ]; then
+  RPC_URL="${STELLAR_RPC_URL:-https://soroban-testnet.stellar.org}"
+  PASSPHRASE="Test SDF Network ; September 2015"
+else
+  RPC_URL="http://localhost:8000/soroban/rpc"
+  PASSPHRASE="Standalone Network ; February 2017"
+fi
 
 PASS_COUNT=0
 FAIL_COUNT=0
@@ -66,29 +72,40 @@ wait_for_healthy() {
     fi
     sleep 2
   done
-  log "local network never became healthy"
+  log "$NETWORK network never became healthy"
   return 1
 }
 
-if ! curl -s -X POST "$RPC_URL" -H "Content-Type: application/json" \
-    -d '{"jsonrpc":"2.0","id":1,"method":"getHealth"}' 2>/dev/null | grep -q '"status":"healthy"'; then
-  log "starting local Soroban devnet container..."
-  stellar container start local
-  wait_for_healthy
-else
-  log "local Soroban devnet already running"
-fi
-
-for identity in payer payee resolver; do
-  if ! stellar keys address "$identity" >/dev/null 2>&1; then
-    stellar keys generate "$identity" --network local --fund >/dev/null
+if [ "$NETWORK" = "local" ]; then
+  if ! curl -s -X POST "$RPC_URL" -H "Content-Type: application/json" \
+      -d '{"jsonrpc":"2.0","id":1,"method":"getHealth"}' 2>/dev/null | grep -q '"status":"healthy"'; then
+    log "starting local Soroban devnet container..."
+    stellar container start local
+    wait_for_healthy
   else
-    # Key already exists locally from a previous run, but its account may
-    # never have been funded (or the container was recreated since) — fund
-    # it again so `init` doesn't fail with "Account not found".
-    stellar keys fund "$identity" --network local >/dev/null 2>&1 || true
+    log "local Soroban devnet already running"
   fi
-done
+
+  for identity in payer payee resolver; do
+    if ! stellar keys address "$identity" >/dev/null 2>&1; then
+      stellar keys generate "$identity" --network local --fund >/dev/null
+    else
+      # Key already exists locally from a previous run, but its account may
+      # never have been funded (or the container was recreated since) — fund
+      # it again so `init` doesn't fail with "Account not found".
+      stellar keys fund "$identity" --network local >/dev/null 2>&1 || true
+    fi
+  done
+elif [ "$NETWORK" = "testnet" ]; then
+  wait_for_healthy
+  for identity in payer payee resolver; do
+    stellar keys generate "$identity" --network testnet >/dev/null
+    stellar keys fund "$identity" --network testnet --rpc-url "$RPC_URL"
+  done
+else
+  log "unsupported network '$NETWORK' (expected local or testnet)"
+  exit 1
+fi
 
 PAYER=$(stellar keys address payer)
 PAYEE=$(stellar keys address payee)
@@ -102,13 +119,13 @@ cargo rustc --manifest-path "$REPO_ROOT/contracts/trellis_core/Cargo.toml" \
   --crate-type=cdylib --target=wasm32-unknown-unknown --release >/dev/null
 
 log "resolving test token (native XLM SAC)..."
-TOKEN=$(stellar contract id asset --asset native --network local 2>/dev/null | tail -1)
-if ! stellar contract info interface --contract-id "$TOKEN" --network local >/dev/null 2>&1; then
-  stellar contract asset deploy --asset native --source payer --network local >/dev/null 2>&1
+TOKEN=$(stellar contract id asset --asset native --network "$NETWORK" 2>/dev/null | tail -1)
+if ! stellar contract info interface --contract-id "$TOKEN" --network "$NETWORK" >/dev/null 2>&1; then
+  stellar contract asset deploy --asset native --source payer --network "$NETWORK" >/dev/null 2>&1
 fi
 
 log "deploying trellis_core contract..."
-CONTRACT_ID=$(stellar contract deploy --wasm "$WASM_PATH" --source payer --network local 2>/dev/null | tail -1)
+CONTRACT_ID=$(stellar contract deploy --wasm "$WASM_PATH" --source payer --network "$NETWORK" 2>/dev/null | tail -1)
 
 log "token=$TOKEN contract=$CONTRACT_ID"
 
@@ -239,7 +256,7 @@ test_error_paths() {
 # Run
 # ---------------------------------------------------------------------------
 
-log "running CLI integration tests against contract $CONTRACT_ID"
+log "running CLI integration tests against $NETWORK contract $CONTRACT_ID"
 test_full_lifecycle
 test_dispute_lifecycle
 test_cancel_unfunded_milestone

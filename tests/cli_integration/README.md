@@ -1,10 +1,10 @@
 # CLI Integration Tests (#142)
 
 Shell-based tests that drive the built `trellis` CLI binary against a real
-Soroban RPC endpoint — a local devnet, not the Soroban sandbox the Rust unit
-tests run in. This is the only layer that exercises the CLI's actual argument
-formatting, JSON parsing, and error handling through the real `stellar
-contract invoke` subprocess.
+Soroban RPC endpoint — a local devnet by default, or Stellar testnet when
+`TRELLIS_E2E_NETWORK=testnet`. This is the only layer that exercises the CLI's
+actual argument formatting, JSON parsing, and error handling through the real
+`stellar contract invoke` subprocess.
 
 ## Prerequisites
 
@@ -23,10 +23,11 @@ bash tests/cli_integration/run.sh
 
 The script is self-contained and idempotent:
 
-1. Starts a local Soroban devnet container if one isn't already running
-   (`stellar container start local`) and waits for it to report healthy.
-2. Generates and funds `payer`/`payee`/`resolver` identities if they don't
-   already exist.
+1. By default, starts a local Soroban devnet container if one isn't already
+   running and waits for it to report healthy. In testnet mode, uses the
+   configured testnet RPC endpoint instead.
+2. Generates and funds separate `payer`/`payee`/`resolver` identities. Testnet
+   mode funds fresh identities from the Stellar testnet friendbot.
 3. Builds the `trellis` CLI (release) and the `trellis_core` contract
    (wasm32), then deploys a fresh contract instance and a native-XLM SAC test
    token.
@@ -44,4 +45,6 @@ already-running container never collides with a previous run's state.
 CI runs this automatically (`.github/workflows/contract-ci.yml`, job
 `cli-integration`) on every push/PR touching `contracts/` or `cli/`, since it
 only needs a local Docker container — no live testnet or credentials
-required.
+required. The separate manual workflow `.github/workflows/e2e-testnet.yml`
+runs this same lifecycle suite against Stellar testnet in an isolated key
+store, which it removes when the run finishes.

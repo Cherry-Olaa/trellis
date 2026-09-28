@@ -1,0 +1,59 @@
+name: Testnet E2E
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: testnet-e2e
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  lifecycle:
+    name: Contract lifecycle on Stellar testnet
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Cache cargo registry and build artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install Stellar CLI
+        run: |
+          curl -fsSL -o stellar-cli.tar.gz https://github.com/stellar/stellar-cli/releases/download/v27.1.0/stellar-cli-27.1.0-x86_64-unknown-linux-gnu.tar.gz
+          tar -xzf stellar-cli.tar.gz
+          sudo mv stellar /usr/local/bin/stellar
+          stellar --version
+
+      - name: Create isolated Stellar key store
+        id: key-store
+        run: |
+          echo "path=$(mktemp -d "$RUNNER_TEMP/stellar-testnet-e2e.XXXXXX")" >> "$GITHUB_OUTPUT"
+          echo "runner_home=$HOME" >> "$GITHUB_OUTPUT"
+
+      - name: Run full contract lifecycle on testnet
+        env:
+          HOME: ${{ steps.key-store.outputs.path }}
+          CARGO_HOME: ${{ steps.key-store.outputs.runner_home }}/.cargo
+          RUSTUP_HOME: ${{ steps.key-store.outputs.runner_home }}/.rustup
+          TRELLIS_E2E_NETWORK: testnet
+        run: bash tests/cli_integration/run.sh
+
+      - name: Remove temporary test identities
+        if: always()
+        env:
+          KEY_STORE: ${{ steps.key-store.outputs.path }}
+        run: |
+          if [[ -n "$KEY_STORE" && -d "$KEY_STORE" ]]; then
+            rm -rf -- "$KEY_STORE"
+          fi
