@@ -498,7 +498,7 @@ Soroban archives persistent ledger entries once their TTL expires, so an agreeme
 | Category | Technologies |
 |---|---|
 | **Smart Contract** | [Soroban](https://developers.stellar.org/docs/build/smart-contracts) · soroban-sdk 22.x · Rust (`#![no_std]` → WASM) |
-| **CLI** | clap 4 · clap_complete · reqwest · serde + serde_json · dotenvy |
+| **CLI** | clap 4 · clap_complete · serde + serde_json · dotenvy |
 | **Frontend** | React 19 · Vite · TypeScript · Tailwind CSS · React Router |
 | **Stellar SDK** | @stellar/stellar-sdk · @stellar/freighter-api · Soroban RPC |
 
@@ -533,7 +533,7 @@ cd contracts/trellis_core
 cargo test
 ```
 
-All 9 integration tests run in the Soroban sandbox — happy path, double-init protection, dispute resolution, milestone cancellation (including the state-transition guard on already-funded milestones), positive-amount validation on `init`, the pre-computed `total_amount`, and the `get_agreement` view function.
+The suite has 51 tests, all run in the Soroban sandbox: 31 example-based tests in `test.rs` (happy path, double-init protection, dispute resolution, milestone cancellation, role checks, batch operations, TTL extension, and the `get_agreement` view function), 11 property-based `proptest` tests in `test_properties.rs` (balance conservation, invalid amounts, milestone isolation), and 9 panic-boundary tests in `test_panic_boundaries.rs`.
 
 ### 📦 Build everything at once
 
@@ -667,7 +667,7 @@ Supported shells: `bash`, `zsh`, `fish`, `elvish`, `powershell`.
 
 - Core Soroban escrow contract — all 10 entrypoints implemented and tested
 - Full state machine — happy path, dispute resolution, and cancellation paths
-- Integration test suite — 41/41 passing in the Soroban sandbox
+- Contract test suite — 51 tests in the Soroban sandbox
 - Full CLI — all 8 commands wired end-to-end with JSON, dry-run, and human-readable output modes
 - Deployed live on Stellar testnet — `init` and `status` verified against the live contract
 - Frontend dashboard — 5 pages, 28 components, 12 custom hooks, animated particle network background
