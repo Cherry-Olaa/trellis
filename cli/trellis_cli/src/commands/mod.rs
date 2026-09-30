@@ -371,6 +371,11 @@ pub fn dispatch(cmd: Commands, config: &Config, opts: &OutputOpts) -> Result<(),
             milestone_id,
         } => run_milestone_status(config, agreement_id, milestone_id, opts),
 
+        // NOTE: `run_status` / `run_milestone_status` decode the raw XDR
+        // `ScVal` returned by `simulateTransaction` natively (see
+        // `decode_agreement_scval` / `decode_milestone_scval` below) instead
+        // of shelling out to the `stellar` CLI for decoding.
+
         // Handled in main() before dispatch is ever reached — completions
         // need the clap `Command` object, not a `Config`.
         Commands::Completion { .. } => Ok(()),

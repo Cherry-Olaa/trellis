@@ -1,5 +1,6 @@
 use crate::config::Config;
 use governor::{Quota, RateLimiter};
+use std::collections::BTreeMap;
 use std::num::NonZeroU32;
 use std::sync::OnceLock;
 
@@ -40,6 +41,30 @@ pub struct InvokeOutput {
     /// The exact command string that was executed — printed on failure so
     /// the caller can reproduce/debug locally.
     pub command_debug: String,
+}
+
+/// A decoded Soroban `ScVal` result, mapped into the CLI's existing internal
+/// representation used by `render_json` / `render_human`.
+///
+/// This mirrors the JSON shape the `stellar` CLI produces for a contract
+/// invoke result, so the native decoder can be swapped in without changing
+/// any downstream rendering code.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ScVal {
+    Void,
+    Bool(bool),
+    U32(u32),
+    I32(i32),
+    U64(u64),
+    I64(i64),
+    U128(u128),
+    I128(i128),
+    Symbol(String),
+    String(String),
+    Bytes(Vec<u8>),
+    Vec(Vec<ScVal>),
+    Map(BTreeMap<String, ScVal>),
+    Address(String),
 }
 
 /// Resolve which `stellar` executable to invoke.
@@ -85,6 +110,24 @@ impl RpcClient {
         // Until then we delegate to the `stellar` CLI, which already handles
         // argument encoding, transaction assembly, signing and submission.
         Self::invoke_with_retry(config, fn_name, args, quiet)
+    }
+
+    /// Decode a raw XDR `ScVal` result (as returned by `simulateTransaction`
+    /// for a read-only contract query) into the CLI's internal `ScVal`
+    /// representation.
+    ///
+    /// This is the native replacement for re-printing the `stellar` CLI's own
+    /// decoded stdout. It accepts the base64-encoded XDR string that the RPC
+    /// returns in `results[0].xdr` and produces a value that `render_json` /
+    /// `render_human` can consume directly.
+    ///
+    /// Returns `Err` with a human-readable message when the input is not a
+    /// valid base64 XDR `ScVal`.
+    pub fn decode_scval_xdr(xdr_b64: &str) -> Result<ScVal, String> {
+        let bytes = decode_base64(xdr_b64)
+            .map_err(|e| format!("invalid base64 in ScVal XDR: {e}"))?;
+        decode_scval_bytes(&bytes)
+            .map_err(|e| format!("invalid ScVal XDR: {e}"))
     }
 
     /// Build the exact `stellar contract invoke …` argument list and its
@@ -251,6 +294,215 @@ impl RpcClient {
             },
         }
     }
+}
+
+/// Decode a standard base64 string (no line breaks, standard alphabet).
+fn decode_base64(input: &str) -> Result<Vec<u8>, String> {
+    const TABLE: &[u8; 64] =
+        b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut lookup = [255u8; 256];
+    for (i, &c) in TABLE.iter().enumerate() {
+        lookup[c as usize] = i as u8;
+    }
+
+    let mut out = Vec::with_capacity(input.len() * 3 / 4);
+    let mut buf: u32 = 0;
+    let mut bits: u32 = 0;
+    let mut padding = 0usize;
+
+    for (i, c) in input.bytes().enumerate() {
+        if c == b'=' {
+            padding += 1;
+            continue;
+        }
+        if c == b'\n' || c == b'\r' || c == b' ' {
+            continue;
+        }
+        let v = lookup[c as usize];
+        if v == 255 {
+            return Err(format!("invalid base64 character {:?} at offset {i}", c as char));
+        }
+        buf = (buf << 6) | v as u32;
+        bits += 6;
+        if bits >= 8 {
+            bits -= 8;
+            out.push((buf >> bits) as u8);
+        }
+    }
+
+    if padding > 2 {
+        return Err("too much base64 padding".to_string());
+    }
+    Ok(out)
+}
+
+/// Decode a raw `ScVal` XDR byte stream into the CLI's internal `ScVal`.
+///
+/// This is a minimal, dependency-free decoder covering the subset of the
+/// Soroban `ScVal` union that Trellis contract queries actually return
+/// (`get_agreement` / `get_milestone`). Unknown discriminants produce a
+/// clear error rather than silently mis-decoding.
+fn decode_scval_bytes(bytes: &[u8]) -> Result<ScVal, String> {
+    let mut cursor = Cursor { bytes, pos: 0 };
+    decode_scval(&mut cursor)
+}
+
+struct Cursor<'a> {
+    bytes: &'a [u8],
+    pos: usize,
+}
+
+impl<'a> Cursor<'a> {
+    fn read_u32(&mut self) -> Result<u32, String> {
+        if self.pos + 4 > self.bytes.len() {
+            return Err("unexpected end of XDR while reading u32".to_string());
+        }
+        let v = u32::from_be_bytes([
+            self.bytes[self.pos],
+            self.bytes[self.pos + 1],
+            self.bytes[self.pos + 2],
+            self.bytes[self.pos + 3],
+        ]);
+        self.pos += 4;
+        Ok(v)
+    }
+
+    fn read_i32(&mut self) -> Result<i32, String> {
+        Ok(self.read_u32()? as i32)
+    }
+
+    fn read_u64(&mut self) -> Result<u64, String> {
+        let hi = self.read_u32()? as u64;
+        let lo = self.read_u32()? as u64;
+        Ok((hi << 32) | lo)
+    }
+
+    fn read_i64(&mut self) -> Result<i64, String> {
+        Ok(self.read_u64()? as i64)
+    }
+
+    fn read_u128(&mut self) -> Result<u128, String> {
+        let hi = self.read_u64()? as u128;
+        let lo = self.read_u64()? as u128;
+        Ok((hi << 64) | lo)
+    }
+
+    fn read_i128(&mut self) -> Result<i128, String> {
+        Ok(self.read_u128()? as i128)
+    }
+
+    fn read_bytes(&mut self, n: usize) -> Result<&'a [u8], String> {
+        if self.pos + n > self.bytes.len() {
+            return Err(format!(
+                "unexpected end of XDR: wanted {n} bytes at offset {}, have {}",
+                self.pos,
+                self.bytes.len() - self.pos
+            ));
+        }
+        let s = &self.bytes[self.pos..self.pos + n];
+        self.pos += n;
+        Ok(s)
+    }
+
+    fn read_padded_bytes(&mut self, n: usize) -> Result<&'a [u8], String> {
+        let s = self.read_bytes(n)?;
+        let pad = (4 - (n % 4)) % 4;
+        self.read_bytes(pad)?;
+        Ok(s)
+    }
+
+    fn read_string(&mut self) -> Result<String, String> {
+        let len = self.read_u32()? as usize;
+        let raw = self.read_padded_bytes(len)?;
+        String::from_utf8(raw.to_vec()).map_err(|e| format!("invalid UTF-8 in XDR string: {e}"))
+    }
+}
+
+/// Soroban `ScVal` union discriminants (subset used by Trellis queries).
+const SCV_BOOL: u32 = 0;
+const SCV_VOID: u32 = 1;
+const SCV_U32: u32 = 3;
+const SCV_I32: u32 = 4;
+const SCV_U64: u32 = 5;
+const SCV_I64: u32 = 6;
+const SCV_U128: u32 = 9;
+const SCV_I128: u32 = 10;
+const SCV_BYTES: u32 = 12;
+const SCV_STRING: u32 = 13;
+const SCV_SYMBOL: u32 = 14;
+const SCV_VEC: u32 = 16;
+const SCV_MAP: u32 = 17;
+const SCV_ADDRESS: u32 = 18;
+
+fn decode_scval(c: &mut Cursor) -> Result<ScVal, String> {
+    let tag = c.read_u32()?;
+    match tag {
+        SCV_BOOL => Ok(ScVal::Bool(c.read_u32()? != 0)),
+        SCV_VOID => Ok(ScVal::Void),
+        SCV_U32 => Ok(ScVal::U32(c.read_u32()?)),
+        SCV_I32 => Ok(ScVal::I32(c.read_i32()?)),
+        SCV_U64 => Ok(ScVal::U64(c.read_u64()?)),
+        SCV_I64 => Ok(ScVal::I64(c.read_i64()?)),
+        SCV_U128 => Ok(ScVal::U128(c.read_u128()?)),
+        SCV_I128 => Ok(ScVal::I128(c.read_i128()?)),
+        SCV_SYMBOL => Ok(ScVal::Symbol(c.read_string()?)),
+        SCV_STRING => Ok(ScVal::String(c.read_string()?)),
+        SCV_BYTES => {
+            let len = c.read_u32()? as usize;
+            Ok(ScVal::Bytes(c.read_padded_bytes(len)?.to_vec()))
+        }
+        SCV_VEC => {
+            let len = c.read_u32()? as usize;
+            let mut items = Vec::with_capacity(len);
+            for _ in 0..len {
+                items.push(decode_scval(c)?);
+            }
+            Ok(ScVal::Vec(items))
+        }
+        SCV_MAP => {
+            let len = c.read_u32()? as usize;
+            let mut map = BTreeMap::new();
+            for _ in 0..len {
+                let k = decode_scval(c)?;
+                let v = decode_scval(c)?;
+                let key = match k {
+                    ScVal::Symbol(s) | ScVal::String(s) => s,
+                    other => format!("{other:?}"),
+                };
+                map.insert(key, v);
+            }
+            Ok(ScVal::Map(map))
+        }
+        SCV_ADDRESS => {
+            // ScAddress union: 0 = account (PublicKey), 1 = contract (Hash).
+            let kind = c.read_u32()?;
+            match kind {
+                0 => {
+                    // PublicKey union: 0 = ed25519 (32 bytes).
+                    let pk_tag = c.read_u32()?;
+                    if pk_tag != 0 {
+                        return Err(format!("unsupported PublicKey tag {pk_tag}"));
+                    }
+                    let raw = c.read_bytes(32)?;
+                    Ok(ScVal::Address(format!("G{}", hex_encode(raw))))
+                }
+                1 => {
+                    let raw = c.read_bytes(32)?;
+                    Ok(ScVal::Address(format!("C{}", hex_encode(raw))))
+                }
+                other => Err(format!("unsupported ScAddress kind {other}")),
+            }
+        }
+        other => Err(format!("unsupported ScVal discriminant {other}")),
+    }
+}
+
+fn hex_encode(bytes: &[u8]) -> String {
+    let mut s = String::with_capacity(bytes.len() * 2);
+    for b in bytes {
+        s.push_str(&format!("{b:02x}"));
+    }
+    s
 }
 
 /// Decode a subprocess output stream, without silently discarding bytes.
@@ -586,5 +838,68 @@ mod tests {
             "dry-run leaked the seed: {preview}"
         );
         assert!(preview.contains("<redacted>"));
+    }
+
+    // --- native ScVal XDR decoding ---
+
+    /// A captured real XDR result for `get_agreement` (a `ScVal::Map` with
+    /// symbol keys and mixed scalar values), base64-encoded exactly as the
+    /// Soroban RPC returns it in `results[0].xdr`.
+    const AGREEMENT_XDR_B64: &str = "AAAAEQAAAAEAAAADAAAADwAAAAhkdXJhdGlvbgAAAAUAAAAAAAAA\
+        CgAAAA9taWxlc3RvbmVfY291bnQAAAAABQAAAAAAAAADAAAADwAAAAdzdGF0dXMAAAAADwAAAAZhY3RpdmUAAAAA";
+
+    #[test]
+    fn decode_scval_xdr_decodes_agreement_map() {
+        let decoded = RpcClient::decode_scval_xdr(AGREEMENT_XDR_B64)
+            .expect("captured agreement XDR must decode");
+        match decoded {
+            ScVal::Map(m) => {
+                assert_eq!(m.get("duration"), Some(&ScVal::U64(10)));
+                assert_eq!(m.get("milestone_count"), Some(&ScVal::U64(3)));
+                assert_eq!(m.get("status"), Some(&ScVal::Symbol("active".to_string())));
+            }
+            other => panic!("expected Map, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn decode_scval_xdr_rejects_invalid_base64() {
+        let err = RpcClient::decode_scval_xdr("not base64!!!").unwrap_err();
+        assert!(err.contains("base64"), "got: {err}");
+    }
+
+    #[test]
+    fn decode_scval_xdr_rejects_truncated_xdr() {
+        // Valid base64 of a truncated ScVal (tag says U64 but no payload).
+        let err = RpcClient::decode_scval_xdr("AAAABQ").unwrap_err();
+        assert!(err.contains("XDR"), "got: {err}");
+    }
+
+    #[test]
+    fn decode_base64_roundtrips_known_vector() {
+        // "hello" -> aGVsbG8=
+        assert_eq!(decode_base64("aGVsbG8=").unwrap(), b"hello".to_vec());
+        assert_eq!(decode_base64("aGVsbG8").unwrap(), b"hello".to_vec());
+    }
+
+    #[test]
+    fn decode_scval_bytes_handles_scalars_and_vecs() {
+        // ScVal::U32(7) -> tag 3, value 7.
+        let mut buf = Vec::new();
+        buf.extend_from_slice(&3u32.to_be_bytes());
+        buf.extend_from_slice(&7u32.to_be_bytes());
+        assert_eq!(decode_scval_bytes(&buf).unwrap(), ScVal::U32(7));
+
+        // ScVal::Vec([Bool(true), Void]) -> tag 16, len 2, then elements.
+        let mut v = Vec::new();
+        v.extend_from_slice(&16u32.to_be_bytes());
+        v.extend_from_slice(&2u32.to_be_bytes());
+        v.extend_from_slice(&0u32.to_be_bytes());
+        v.extend_from_slice(&1u32.to_be_bytes());
+        v.extend_from_slice(&1u32.to_be_bytes());
+        assert_eq!(
+            decode_scval_bytes(&v).unwrap(),
+            ScVal::Vec(vec![ScVal::Bool(true), ScVal::Void])
+        );
     }
 }
