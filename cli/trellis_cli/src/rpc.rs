@@ -1,5 +1,6 @@
 use crate::config::Config;
 use governor::{Quota, RateLimiter};
+use std::io::Write;
 use std::num::NonZeroU32;
 use std::sync::OnceLock;
 
@@ -151,6 +152,87 @@ impl RpcClient {
     /// `fn_name`/`args`, without executing it. Used by `--dry-run`.
     pub fn preview(config: &Config, fn_name: &str, args: &[String]) -> String {
         Self::build_cmd_args(config, fn_name, args).1
+    }
+
+    /// Fetch the network passphrase reported by the configured RPC endpoint.
+    ///
+    /// Issues a native `getNetwork` JSON-RPC request directly to
+    /// `config.rpc_url` (no `stellar` CLI dependency) and returns the
+    /// `passphrase` field from the response.
+    ///
+    /// The request is sent over a plain `TcpStream` using a minimal HTTP/1.1
+    /// POST so the CLI does not need an async runtime or an HTTP client
+    /// dependency. Only `http://` endpoints are supported here; `https://`
+    /// endpoints return an error so callers can fall back to the CLI path.
+    pub fn get_network_passphrase(config: &Config) -> Result<String, String> {
+        let url = config.rpc_url.trim();
+        let rest = url
+            .strip_prefix("http://")
+            .ok_or_else(|| format!("unsupported RPC URL scheme (expected http://): {url}"))?;
+
+        let (host_port, path) = match rest.find('/') {
+            Some(idx) => (&rest[..idx], &rest[idx..]),
+            None => (rest, "/"),
+        };
+        let (host, port) = match host_port.rsplit_once(':') {
+            Some((h, p)) => (
+                h,
+                p.parse::<u16>()
+                    .map_err(|_| format!("invalid port in RPC URL: {url}"))?,
+            ),
+            None => (host_port, 80u16),
+        };
+
+        let body = r#"{"jsonrpc":"2.0","id":1,"method":"getNetwork"}"#;
+        let request = format!(
+            "POST {path} HTTP/1.1\r\n\
+             Host: {host}\r\n\
+             Content-Type: application/json\r\n\
+             Content-Length: {len}\r\n\
+             Connection: close\r\n\
+             \r\n\
+             {body}",
+            len = body.len(),
+        );
+
+        let mut stream = std::net::TcpStream::connect((host, port))
+            .map_err(|e| format!("failed to connect to RPC endpoint {host}:{port}: {e}"))?;
+        stream
+            .write_all(request.as_bytes())
+            .map_err(|e| format!("failed to send getNetwork request: {e}"))?;
+
+        let mut response = String::new();
+        std::io::Read::read_to_string(&mut stream, &mut response)
+            .map_err(|e| format!("failed to read getNetwork response: {e}"))?;
+
+        let body_start = response
+            .find("\r\n\r\n")
+            .map(|i| i + 4)
+            .ok_or_else(|| "malformed HTTP response from RPC endpoint".to_string())?;
+        let json = &response[body_start..];
+
+        extract_json_string_field(json, "passphrase")
+            .ok_or_else(|| format!("RPC getNetwork response missing `passphrase`: {json}"))
+    }
+
+    /// Verify that `config.network_passphrase` matches the passphrase reported
+    /// by the configured RPC endpoint.
+    ///
+    /// Returns `Ok(())` when they match and a clear, specific error naming both
+    /// values when they do not. This is intended to be called early (e.g. from
+    /// `validate_environment`) so a misconfigured `--rpc-url` /
+    /// `--network-passphrase` pair fails fast instead of producing a confusing
+    /// downstream error.
+    pub fn verify_network_passphrase(config: &Config) -> Result<(), String> {
+        let actual = Self::get_network_passphrase(config)?;
+        if actual == config.network_passphrase {
+            Ok(())
+        } else {
+            Err(format!(
+                "network passphrase mismatch: configured '{}' but RPC endpoint {} reports '{}'",
+                config.network_passphrase, config.rpc_url, actual
+            ))
+        }
     }
 
     /// Invoke via stellar CLI with automatic retry on transient RPC failures.
@@ -307,6 +389,39 @@ fn hex_preview(bytes: &[u8]) -> String {
         out.push_str(&format!(" … (+{} more)", bytes.len() - MAX));
     }
     out
+}
+
+/// Extract the value of a top-level string field from a JSON object without
+/// pulling in a JSON dependency.
+///
+/// This is intentionally minimal: it looks for `"<field>"` followed by a
+/// colon and a double-quoted string, and returns the unescaped contents. It is
+/// only used for the small, well-formed `getNetwork` response.
+fn extract_json_string_field(json: &str, field: &str) -> Option<String> {
+    let needle = format!("\"{field}\"");
+    let start = json.find(&needle)? + needle.len();
+    let after = &json[start..];
+    let colon = after.find(':')?;
+    let rest = after[colon + 1..].trim_start();
+    let mut chars = rest.chars();
+    if chars.next()? != '"' {
+        return None;
+    }
+    let mut out = String::new();
+    let mut escaped = false;
+    for c in chars {
+        if escaped {
+            out.push(c);
+            escaped = false;
+        } else if c == '\\' {
+            escaped = true;
+        } else if c == '"' {
+            return Some(out);
+        } else {
+            out.push(c);
+        }
+    }
+    None
 }
 
 /// Return true when stderr content indicates a transient, retriable RPC error.
@@ -586,5 +701,38 @@ mod tests {
             "dry-run leaked the seed: {preview}"
         );
         assert!(preview.contains("<redacted>"));
+    }
+
+    // --- network passphrase verification ---
+
+    #[test]
+    fn extract_json_string_field_reads_passphrase() {
+        let json = r#"{"jsonrpc":"2.0","id":1,"result":{"passphrase":"Test SDF Network ; September 2015","protocolVersion":20}}"#;
+        assert_eq!(
+            extract_json_string_field(json, "passphrase").as_deref(),
+            Some("Test SDF Network ; September 2015")
+        );
+    }
+
+    #[test]
+    fn extract_json_string_field_handles_escapes() {
+        let json = r#"{"passphrase":"a \"quoted\" value"}"#;
+        assert_eq!(
+            extract_json_string_field(json, "passphrase").as_deref(),
+            Some("a \"quoted\" value")
+        );
+    }
+
+    #[test]
+    fn extract_json_string_field_missing_returns_none() {
+        assert_eq!(extract_json_string_field(r#"{"result":{}}"#, "passphrase"), None);
+    }
+
+    #[test]
+    fn verify_network_passphrase_rejects_unsupported_scheme() {
+        let mut cfg = cfg_with_source("alice");
+        cfg.rpc_url = "https://soroban-testnet.stellar.org".to_string();
+        let err = RpcClient::verify_network_passphrase(&cfg).unwrap_err();
+        assert!(err.contains("unsupported RPC URL scheme"), "got: {err}");
     }
 }
