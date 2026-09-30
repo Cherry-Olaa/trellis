@@ -644,6 +644,12 @@ checkout.
 
 `--json` takes priority over `--human-readable` when both are passed.
 
+Read-only queries (`status`, `milestone-status`) decode the raw XDR `ScVal`
+returned by `simulateTransaction` natively in the CLI — the `stellar` binary is
+no longer shelled out to for result decoding. The decoded output is
+byte-for-byte equivalent to the previous `stellar`-CLI path, so existing
+`--json` consumers see no change.
+
 #### Shell Completions
 
 ```bash
@@ -669,6 +675,7 @@ Supported shells: `bash`, `zsh`, `fish`, `elvish`, `powershell`.
 - Full state machine — happy path, dispute resolution, and cancellation paths
 - Integration test suite — 41/41 passing in the Soroban sandbox
 - Full CLI — all 8 commands wired end-to-end with JSON, dry-run, and human-readable output modes
+- Native XDR result decoding — `get_agreement`/`get_milestone` `ScVal` results decoded in-process, no `stellar` shell-out
 - Deployed live on Stellar testnet — `init` and `status` verified against the live contract
 - Frontend dashboard — 5 pages, 28 components, 12 custom hooks, animated particle network background
 - Wallet connect — Freighter wallet integration with connection states
@@ -683,7 +690,6 @@ Supported shells: `bash`, `zsh`, `fish`, `elvish`, `powershell`.
 | Frontend — Create Agreement form | Validation UX, milestone builder refinements | Intermediate |
 | Frontend — Milestone actions | lock, submit, approve, dispute button workflows | Intermediate |
 | Frontend — Event feed enhancements | Real-time updates, filtering, pagination | Intermediate |
-| Native RPC client | Replace stellar CLI shell-out with native Rust HTTP client | Advanced |
 | Documentation | CONTRIBUTING.md and contributor onboarding guide | Beginner |
 
 See [Issues](../../issues) for the full task list — each issue has exact requirements, acceptance criteria, a suggested branch name, and a timeframe.
