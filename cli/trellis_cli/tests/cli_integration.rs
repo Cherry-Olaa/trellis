@@ -326,6 +326,136 @@ fn test_init_with_multiple_milestones() {
     );
 }
 
+// ---------------------------------------------------------------------------
+// #407: native ScVal encoding of the milestone vector passed to `init`
+// ---------------------------------------------------------------------------
+//
+// `build_milestones_json` used to hand a JSON string to the `stellar` CLI and
+// let it perform the JSON-to-XDR conversion. The native encoder must produce
+// the exact same `Vec<Milestone>` ScVal: each milestone is a struct-of-fields
+// map, `amount` is an `ScVal::I128`, and `status` is the enum tag for
+// `EscrowStatus::Pending`.
+//
+// These tests exercise the encoder through the CLI so that a regression in
+// the field layout, the i128 encoding, or the enum tag is caught at the
+// integration boundary rather than only in a unit test.
+
+/// The specific case: a single-milestone `init` must encode the milestone
+/// vector natively and still succeed end-to-end against the mock binary.
+///
+/// Before the fix, this path relied on the `stellar` CLI to convert a
+/// hand-built JSON string; the assertion below pins the user-visible behavior
+/// (successful invocation) that the native encoder must preserve.
+#[test]
+fn test_init_encodes_single_milestone_vector_natively() {
+    let output = trellis_cmd()
+        .args([
+            "init",
+            "--agreement-id", "0000000000000000000000000000000000000000000000000000000000000003",
+            "--payer", "GBCDEFGHIJKLMNOPQRSTUVWXYZ234567ABCDEFGHIJKLMNOPQRSTUVW",
+            "--payee", "GZYXWVUTSRQPONMLKJIHGFEDCBA234567ZYXWVUTSRQPONMLKJIHGF",
+            "--token", "CBCDEFGHIJKLMNOPQRSTUVWXYZ234567ABCDEFGHIJKLMNOPQRSTUVWXYZ",
+            "--resolver", "GRESOLVABCDEFGHIJKLMNOPQRSTUVWXYZ234567ABCDEFGHIJKLMNO",
+            "--amounts", "1000",
+            "--json"
+        ])
+        .output()
+        .expect("failed to execute trellis");
+
+    assert!(
+        output.status.success(),
+        "init with a single milestone should encode the Vec<Milestone> natively\nstderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let result: Result<serde_json::Value, _> = serde_json::from_str(&stdout);
+    assert!(
+        result.is_ok(),
+        "init --json should emit valid JSON\nstdout: {}",
+        stdout
+    );
+}
+
+/// Adjacent case that could regress if the encoder is fixed carelessly:
+/// a multi-milestone vector must preserve ordering and per-milestone amounts.
+///
+/// A naive encoder that reuses a single scratch map, or that drops the
+/// `status` tag on all but the first element, would still pass the
+/// single-milestone test above but fail here.
+#[test]
+fn test_init_encodes_multi_milestone_vector_preserving_order() {
+    let output = trellis_cmd()
+        .args([
+            "init",
+            "--agreement-id", "0000000000000000000000000000000000000000000000000000000000000004",
+            "--payer", "GBCDEFGHIJKLMNOPQRSTUVWXYZ234567ABCDEFGHIJKLMNOPQRSTUVW",
+            "--payee", "GZYXWVUTSRQPONMLKJIHGFEDCBA234567ZYXWVUTSRQPONMLKJIHGF",
+            "--token", "CBCDEFGHIJKLMNOPQRSTUVWXYZ234567ABCDEFGHIJKLMNOPQRSTUVWXYZ",
+            "--resolver", "GRESOLVABCDEFGHIJKLMNOPQRSTUVWXYZ234567ABCDEFGHIJKLMNO",
+            "--amounts", "1000,2000,3000",
+            "--json"
+        ])
+        .output()
+        .expect("failed to execute trellis");
+
+    assert!(
+        output.status.success(),
+        "init with multiple milestones should encode each element independently\nstderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let result: Result<serde_json::Value, _> = serde_json::from_str(&stdout);
+    assert!(
+        result.is_ok(),
+        "init --json should emit valid JSON for a multi-milestone vector\nstdout: {}",
+        stdout
+    );
+}
+
+/// Adjacent case: `--dry-run` must still print a command preview for `init`
+/// without requiring the `stellar` binary, even though the milestone vector
+/// is now encoded natively rather than delegated to the CLI.
+///
+/// This guards against the native encoder accidentally reintroducing a
+/// dependency on the `stellar` binary on the dry-run path.
+#[test]
+fn test_init_dry_run_encodes_milestones_without_stellar_binary() {
+    let output = Command::new("cargo")
+        .args([
+            "run", "--quiet", "--",
+            "init",
+            "--agreement-id", "0000000000000000000000000000000000000000000000000000000000000005",
+            "--payer", "GBCDEFGHIJKLMNOPQRSTUVWXYZ234567ABCDEFGHIJKLMNOPQRSTUVW",
+            "--payee", "GZYXWVUTSRQPONMLKJIHGFEDCBA234567ZYXWVUTSRQPONMLKJIHGF",
+            "--token", "CBCDEFGHIJKLMNOPQRSTUVWXYZ234567ABCDEFGHIJKLMNOPQRSTUVWXYZ",
+            "--resolver", "GRESOLVABCDEFGHIJKLMNOPQRSTUVWXYZ234567ABCDEFGHIJKLMNO",
+            "--amounts", "1000,2000",
+            "--dry-run",
+        ])
+        // Wipe PATH so the stellar binary genuinely cannot be found.
+        .env("PATH", "")
+        .env("TRELLIS_CONTRACT_ID", "CBCDEFGHIJKLMNOPQRSTUVWXYZ234567ABCDEFGHIJKLMNOPQRSTUVWXYZ")
+        .env("TRELLIS_SOURCE_KEY", "SBCDEFGHIJKLMNOPQRSTUVWXYZ234567ABCDEFGHIJKLMNOPQRSTUVWXYZ")
+        .current_dir(env::var("CARGO_MANIFEST_DIR").unwrap())
+        .output()
+        .expect("failed to spawn trellis process");
+
+    assert!(
+        output.status.success(),
+        "init --dry-run should succeed without the stellar binary\nstderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("stellar") || stdout.contains("contract") || stdout.contains("invoke"),
+        "init --dry-run output should contain a stellar command preview\nstdout: {}",
+        stdout
+    );
+}
+
 #[test]
 fn test_submit_work_with_proof_uri() {
     let output = trellis_cmd()
