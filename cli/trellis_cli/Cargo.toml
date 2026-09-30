@@ -12,17 +12,6 @@ path = "src/main.rs"
 # Only the dependencies actually imported by the crate are declared here.
 #
 
-The CLI currently shells out to the `stellar` binary for contract invokes
-# (see `src/rpc.rs`), so it needs no HTTP client, async runtime, or crypto
-# crates of its own. `reqwest`, `tokio`, `serde` (derive), `hex`, `sha2`,
-# `ed25519-dalek` and `base64` were previously listed in anticipation of a
-# native Soroban RPC client but were never imported — they only inflated
-# build time and binary size, so they have been removed. Re-add them (behind
-# a `native-rpc` feature) hen `RpcClient` gains a real transaction-signing
-# path.
-# The native strkey codec (src/strkey.rs) is self-contained: it implements
-# base32 and CRC16 inline and only needs `sha2` for the checksum-free
-# hash-based variants. No additional crypto crates are required.
 [dependencies]
 clap = { version = "4", features = ["derive"] }
 clap_complete = "4"
