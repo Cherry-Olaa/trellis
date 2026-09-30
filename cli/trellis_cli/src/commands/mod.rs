@@ -367,9 +367,6 @@ pub fn dispatch(cmd: Commands, config: &Config, opts: &OutputOpts) -> Result<(),
 
         Commands::Status { agreement_id } => run_status(config, agreement_id, opts),
 
-        // NOTE: `run_status`/`run_milestone_status` decode the raw XDR `ScVal`
-        // returned by `simulateTransaction` natively via `crate::xdr_decode`
-        // instead of shelling out to the `stellar` CLI for decoding.
 
         Commands::MilestoneStatus {
             agreement_id,

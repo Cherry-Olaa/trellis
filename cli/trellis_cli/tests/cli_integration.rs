@@ -1,1 +1,515 @@
-Ly8gQ0xJIGludGVncmF0aW9uIHRlc3RzIHVzaW5nIGEgbW9jayBzdGVsbGFyIGJpbmFyeS4KLy8KLy8gVGhlc2UgdGVzdHMgdmVyaWZ5IGFyZ3VtZW50IHBhcnNpbmcsIGVycm9yIGhhbmRsaW5nLCBvdXRwdXQgZm9ybWF0dGluZywKLy8gYW5kIEpTT04gc2VyaWFsaXphdGlvbiB3aXRob3V0IHJlcXVpcmluZyBhIGxpdmUgU29yb2JhbiBuZXR3b3JrLgovLwovLyBSdW4gd2l0aDoKLy8gICBjYXJnbyB0ZXN0IC0tdGVzdCBjbGlfaW50ZWdyYXRpb24KCnVzZSBzdGQ6OnByb2Nlc3M6OkNvbW1hbmQ7CnVzZSBzdGQ6OmVudjsKCi8vIC0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0KLy8gVGVzdCBoZWxwZXJzCi8vIC0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0KCi8vLyBQYXRoIHRvIHRoZSBtb2NrIHN0ZWxsYXIgYmluYXJ5IHNjcmlwdApmbiBtb2NrX3N0ZWxsYXJfcGF0aCgpIC0+IFN0cmluZyB7CiAgICBsZXQgbWFuaWZlc3RfZGlyID0gZW52Ojp2YXIoIkNBUkdPX01BTklGRVNUX0RJUiIpLnVud3JhcCgpOwogICAgZm9ybWF0ISgie30vdGVzdHMvbW9ja19zdGVsbGFyLnNoIiwgbWFuaWZlc3RfZGlyKQp9CgovLy8gQnVpbGQgYSB0cmVsbGlzIENMSSBpbnZvY2F0aW9uIHdpdGggdGhlIG1vY2sgc3RlbGxhciBiaW5hcnkKZm4gdHJlbGxpc19jbWQoKSAtPiBDb21tYW5kIHsKICAgIGxldCBtdXQgY21kID0gQ29tbWFuZDo6bmV3KCJjYXJnbyIpOwogICAgY21kLmFyZ3MoWyJydW4iLCAiLS1xdWlldCIsICItLSJdKQogICAgICAgIC5lbnYoIlRSRUxMSVNfVEVTVF9NT0RFIiwgInRydWUiKQogICAgICAgIC5lbnYoIlNURUxMQVJfTU9DS19CSU4iLCBtb2NrX3N0ZWxsYXJfcGF0aCgpKQogICAgICAgIC5lbnYoIlRSRUxMSVNfQ09OVFJBQ1RfSUQiLCAiQ0JDREVGR0hJSktMTU5PUFFSU1RVVldYWVoyMzQ1NjdBQkNERUZHSElKS0xNTk9QUVJTVFVWV1hZWiIpCiAgICAgICAgLmVudigiVFJFTExJU19TT1VSQ0VfS0VZIiwgIlNCQ0RFRkdISUpLTE1OT1BRUlNUVVZXWFlaMjM0NTY3QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVoiKTsKICAgIGNtZAp9CgovLyAtLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tCi8vIEFyZ3VtZW50IHBhcnNpbmcgdGVzdHMKLy8gLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLQoKI1t0ZXN0XQpmbiB0ZXN0X2luaXRfcGFyc2VzX2FsbF9yZXF1aXJlZF9hcmdzKCkgewogICAgbGV0IG91dHB1dCA9IHRyZWxsaXNfY21kKCkKICAgICAgICAuYXJncyhbCiAgICAgICAgICAgICJpbml0IiwKICAgICAgICAgICAgIi0tYWdyZWVtZW50LWlkIiwgIjAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDEiLAogICAgICAgICAgICAiLS1wYXllciIsICJHQkNERUZHSElKS0xNTk9QUVJTVFVWV1hZWjIzNDU2N0FCQ0RFRkdISUpLTE1OT1BRUlNUVVZXIiwKICAgICAgICAgICAgIi0tcGF5ZWUiLCAiR1pZWFdWVVRTUlFQT05NTEtKSUhHRkVEQ0JBMjM0NTY3WllYV1ZVVAoU1FQT05NTEtKSUhHRiIsCiAgICAgICAgICAgICItLXRva2VuIiwgIkNCQ0RFRkdISUpLTE1OT1BRUlNUVVZXWFlaMjM0NTY3QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVoiLAogICAgICAgICAgICAiLS1yZXNvbHZlciIsICJHUkVTT0xWQUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVoyMzQ1NjdBQkNERUZHSElKS0xNTk8iLAogICAgICAgICAgICAiLS1hbW91bnRzIiwgIjEwMDAsMjAwMCwzMDAwIiwKICAgICAgICAgICAgIi0tZHJ5LXJ1biIKICAgICAgICBdKQogICAgICAgIC5vdXRwdXQoKQogICAgICAgIC5leHBlY3QoImZhaWxlZCB0byBleGVjdXRlIHRyZWxsaXMiKTsKCiAgICBhc3NlcnQhKAogICAgICAgIG91dHB1dC5zdGF0dXMuc3VjY2VzcygpLAogICAgICAgICJpbml0IHdpdGggYWxsIHJlcXVpcmVkIGFyZ3Mgc2hvdWxkIHN1Y2NlZWQgKGRyeS1ydW4pXG5zdGRlcnI6IHt9IiwKICAgICAgICBTdHJpbmc6OmZyb21fdXRmOF9sb3NzeSgmb3V0cHV0LnN0ZGVycikKICAgICk7Cn0KCiNbdGVzdF0KZm4gdGVzdF9sb2NrX2Z1bmRzX3BhcnNlc19yZXF1aXJlZF9hcmdzKCkgewogICAgbGV0IG91dHB1dCA9IHRyZWxsaXNfY21kKCkKICAgICAgICAuYXJncyhbCiAgICAgICAgICAgICJsb2NrIiwKICAgICAgICAgICAgIi0tYWdyZWVtZW50LWlkIiwgIjAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDEiLAogICAgICAgICAgICAiLS1taWxlc3RvbmUtaWQiLCAiMCIsCiAgICAgICAgICAgICItLWRyeS1ydW4iCiAgICAgICAgXSkKICAgICAgICAub3V0cHV0KCkKICAgICAgICAuZXhwZWN0KCJmYWlsZWQgdG8gZXhlY3V0ZSB0cmVsbGlzIik7CgogICAgYXNzZXJ0ISgKICAgICAgICBvdXRwdXQuc3RhdHVzLnN1Y2Nlc3MoKSwKICAgICAgICAibG9jayB3aXRoIHJlcXVpcmVkIGFyZ3Mgc2hvdWxkIHN1Y2NlZWQgKGRyeS1ydW4pXG5zdGRlcnI6IHt9IiwKICAgICAgICBTdHJpbmc6OmZyb21fdXRmOF9sb3NzeSgmb3V0cHV0LnN0ZGVycikKICAgICk7Cn0KCiNbdGVzdF0KZm4gdGVzdF9zdGF0dXNfcmVxdWlyZXNfYWdyZWVtZW50X2lkKCkgewogICAgbGV0IG91dHB1dCA9IHRyZWxsaXNfY21kKCkKICAgICAgICAuYXJncyhbInN0YXR1cyJdKQogICAgICAgIC5vdXRwdXQoKQogICAgICAgIC5leHBlY3QoImZhaWxlZCB0byBleGVjdXRlIHRyZWxsaXMiKTsKCiAgICBhc3NlcnQhKAogICAgICAgICFvdXRwdXQuc3RhdHVzLnN1Y2Nlc3MoKSwKICAgICAgICAic3RhdHVzIHdpdGhvdXQgLS1hZ3JlZW1lbnQtaWQgc2hvdWxkIGZhaWwiCiAgICApOwoKICAgIGxldCBzdGRlcnIgPSBTdHJpbmc6OmZyb21fdXRmOF9sb3NzeSgmb3V0cHV0LnN0ZGVycik7CiAgICBhc3NlcnQhKAogICAgICAgIHN0ZGVyci5jb250YWlucygiYWdyZWVtZW50LWlkIikgfHwgc3RkZXJyLmNvbnRhaW5zKCJyZXF1aXJlZCIpLAogICAgICAgICJlcnJvciBtZXNzYWdlIHNob3VsZCBtZW50aW9uIG1pc3NpbmcgYWdyZWVtZW50LWlkIgogICAgKTsKfQoKLy8gLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLQovLyBPdXRwdXQgZm9ybWF0IHRlc3RzCi8vIC0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0KCiNbdGVzdF0KZm4gdGVzdF9qc29uX291dHB1dF9mb3JtYXQoKSB7CiAgICBsZXQgb3V0cHV0ID0gdHJlbGxpc19jbWQoKQogICAgICAgIC5hcmdzKFsKICAgICAgICAgICAgInN0YXR1cyIsCiAgICAgICAgICAgICItLWFncmVlbWVudC1pZCIsICIwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAxIiwKICAgICAgICAgICAgIi0tanNvbiIKICAgICAgICBdKQogICAgICAgIC5vdXRwdXQoKQogICAgICAgIC5leHBlY3QoImZhaWxlZCB0byBleGVjdXRlIHRyZWxsaXMiKTsKCiAgICBhc3NlcnQhKAogICAgICAgIG91dHB1dC5zdGF0dXMuc3VjY2VzcygpLAogICAgICAgICJzdGF0dXMgLS1qc29uIHNob3VsZCBzdWNjZWVkXG5zdGRlcnI6IHt9IiwKICAgICAgICBTdHJpbmc6OmZyb21fdXRmOF9sb3NzeSgmb3V0cHV0LnN0ZGVycikKICAgICk7CgogICAgbGV0IHN0ZG91dCA9IFN0cmluZzo6ZnJvbV91dGY4X2xvc3N5KCZvdXRwdXQuc3Rkb3V0KTsKICAgIGFzc2VydCEoCiAgICAgICAgc3Rkb3V0LmNvbnRhaW5zKCd7JykgJiYgc3Rkb3V0LmNvbnRhaW5zKCd9JyksCiAgICAgICAgIkpTT04gb3V0cHV0IHNob3VsZCBjb250YWluIGJyYWNlcyIKICAgICk7CgogICAgLy8gVmFsaWRhdGUgaXQncyBwYXJzZWFibGUgSlNPTgogICAgbGV0IHJlc3VsdDogUmVzdWx0PHNlcmRlX2pzb246OlZhbHVlLCBfPiA9IHNlcmRlX2pzb246OmZyb21fc3RyKCZzdGRvdXQpOwogICAgYXNzZXJ0ISgKICAgICAgICByZXN1bHQuaXNfb2soKSwKICAgICAgICAiSlNPTiBvdXRwdXQgc2hvdWxkIGJlIHZhbGlkIEpTT05cbnN0ZG91dDoge30iLAogICAgICAgIHN0ZG91dAogICAgKTsKfQoKI1t0ZXN0XQpmbiB0ZXN0X3F1aWV0X21vZGVfc3VwcHJlc3Nlc19ub25fcmVzdWx0X291dHB1dCgpIHsKICAgIGxldCBvdXRwdXQgPSB0cmVsbGlzX2NtZCgpCiAgICAgICAgLmFyZ3MoWwogICAgICAgICAgICAic3RhdHVzIiwKICAgICAgICAgICAgIi0tYWdyZWVtZW50LWlkIiwgIjAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDEiLAogICAgICAgICAgICAiLS1xdWlldCIKICAgICAgICBdKQogICAgICAgIC5vdXRwdXQoKQogICAgICAgIC5leHBlY3QoImZhaWxlZCB0byBleGVjdXRlIHRyZWxsaXMiKTsKCiAgICBhc3NlcnQhKAogICAgICAgIG91dHB1dC5zdGF0dXMuc3VjY2VzcygpLAogICAgICAgICJzdGF0dXMgLS1xdWlldCBzaG91bGQgc3VjY2VlZFxuc3RkZXJyOiB7fSIsCiAgICAgICAgU3RyaW5nOjpmcm9tX3V0ZjhfbG9zc3koJm91dHB1dC5zdGRlcnIpCiAgICApOwoKICAgIGxldCBzdGRvdXQgPSBTdHJpbmc6OmZyb21fdXRmOF9sb3NzeSgmb3V0cHV0LnN0ZG91dCk7CiAgICAvLyBJbiBxdWlldCBtb2RlLCB3ZSBzaG91bGQgb25seSBnZXQgdGhlIEpTT04gcmVzdWx0LCBubyBvdGhlciBtZXNzYWdlcwogICAgYXNzZXJ0ISgKICAgICAgICAhc3Rkb3V0LmNvbnRhaW5zKCJJbnZva2luZyIpICYmICFzdGRvdXQuY29udGFpbnMoIlN1Y2Nlc3MiKSwKICAgICAgICAicXVpZXQgbW9kZSBzaG91bGQgc3VwcHJlc3Mgbm9uLXJlc3VsdCBtZXNzYWdlcyIKICAgICk7Cn0KCi8vIC0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0KLy8gRXJyb3IgcGF0aCB0ZXN0cwovLyAtLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tCgojW3Rlc3RdCmZuIHRlc3RfbWlzc2luZ19zdGVsbGFyX2JpbmFyeV9lcnJvcigpIHsKICAgIC8vIFRlbXBvcmFyaWx5IHVuc2V0IHRoZSBtb2NrIGJpbmFyeSB0byBzaW11bGF0ZSBzdGVsbGFyIG5vdCBiZWluZyBpbiBQQVRICiAgICBsZXQgb3V0cHV0ID0gQ29tbWFuZDo6bmV3KCJjYXJnbyIpCiAgICAgICAgLmFyZ3MoWyJydW4iLCAiLS1xdWlldCIsICItLSIsICJzdGF0dXMiLCAiLS1hZ3JlZW1lbnQtaWQiLCAiMDAwMSJdKQogICAgICAgIC5lbnZfcmVtb3ZlKCJTVEVMTEFSX01PQ0tfQklOIikKICAgICAgICAuZW52X3JlbW92ZSgiUEFUSCIpICAvLyBSZW1vdmUgUEFUSCB0byBlbnN1cmUgc3RlbGxhciBpcyBub3QgZm91bmQKICAgICAgICAuZW52KCJUUkVMTElTX0NPTlRSQUNUX0lEIiwgIkNCQ0RFRkdISUpLTE1OT1BRUlNUVVZXWFlaMjM0NTY3QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVoiKQogICAgICAgIC5vdXRwdXQoKQogICAgICAgIC5leHBlY3QoImZhaWxlZCB0byBleGVjdXRlIHRyZWxsaXMiKTsKCiAgICBsZXQgc3RkZXJyID0gU3RyaW5nOjpmcm9tX3V0ZjhfbG9zc3koJm91dHB1dC5zdGRlcnIpOwogICAgCiAgICAvLyBUaGUgZXJyb3Igc2hvdWxkIG1lbnRpb24gc3RlbGxhciBDTEkgbm90IGJlaW5nIGZvdW5kCiAgICBhc3NlcnQhKAogICAgICAgIHN0ZGVyci5jb250YWlucygic3RlbGxhciIpIHx8IHN0ZGVyci5jb250YWlucygibm90IGZvdW5kIikgfHwgc3RkZXJyLmNvbnRhaW5zKCJpbnN0YWxsIiksCiAgICAgICAgImVycm9yIHNob3VsZCBtZW50aW9uIHN0ZWxsYXIgQ0xJXG5zdGRlcnI6IHt9IiwKICAgICAgICBzdGRlcnIKICAgICk7Cn0KCiNbdGVzdF0KZm4gdGVzdF9pbnZhbGlkX2hleF9hZ3JlZW1lbnRfaWQoKSB7CiAgICBsZXQgb3V0cHV0ID0gdHJlbGxpc19jbWQoKQogICAgICAgIC5hcmdzKFsKICAgICAgICAgICAgInN0YXR1cyIsCiAgICAgICAgICAgICItLWFncmVlbWVudC1pZCIsICJub3QtdmFsaWQtaGV4IiwKICAgICAgICAgICAgIi0tZHJ5LXJ1biIKICAgICAgICBdKQogICAgICAgIC5vdXRwdXQoKQogICAgICAgIC5leHBlY3QoImZhaWxlZCB0byBleGVjdXRlIHRyZWxsaXMiKTsKCiAgICAvLyBTaG91bGQgZmFpbCB3aXRoIGhlbHBmdWwgZXJyb3IgYWJvdXQgaGV4IGZvcm1hdAogICAgYXNzZXJ0ISgKICAgICAgICAhb3V0cHV0LnN0YXR1cy5zdWNjZXNzKCksCiAgICAgICAgImludmFsaWQgaGV4IGFncmVlbWVudC1pZCBzaG91bGQgZmFpbCIKICAgICk7CgogICAgbGV0IHN0ZGVyciA9IFN0cmluZzo6ZnJvbV91dGY4X2xvc3N5KCZvdXRwdXQuc3RkZXJyKTsKICAgIGFzc2VydCEoCiAgICAgICAgc3RkZXJyLmNvbnRhaW5zKCJoZXgiKSB8fCBzdGRlcnIuY29udGFpbnMoImludmFsaWQiKSB8fCBzdGRlcnIuY29udGFpbnMoImZvcm1hdCIpLAogICAgICAgICJlcnJvciBzaG91bGQgbWVudGlvbiBpbnZhbGlkIGhleCBmb3JtYXRcbnN0ZGVycjoge30iLAogICAgICAgIHN0ZGVycgogICAgKTsKfQoKI1t0ZXN0XQpmbiB0ZXN0X21pc3NpbmdfcmVxdWlyZWRfZW52X3ZhcnMoKSB7CiAgICBsZXQgb3V0cHV0ID0gQ29tbWFuZDo6bmV3KCJjYXJnbyIpCiAgICAgICAgLmFyZ3MoWyJydW4iLCAiLS1xdWlldCIsICItLSIsICJzdGF0dXMiLCAiLS1hZ3JlZW1lbnQtaWQiLCAiMDAwMSJdKQogICAgICAgIC5lbnZfcmVtb3ZlKCJUUkVMTElTX0NPTlRSQUNUX0lEIikKICAgICAgICAuZW52X3JlbW92ZSgiVFJFTExJU19TT1VSQ0VfS0VZIikKICAgICAgICAub3V0cHV0KCkKICAgICAgICAuZXhwZWN0KCJmYWlsZWQgdG8gZXhlY3V0ZSB0cmVsbGlzIik7CgogICAgbGV0IHN0ZGVyciA9IFN0cmluZzo6ZnJvbV91dGY4X2xvc3N5KCZvdXRwdXQuc3RkZXJyKTsKICAgIAogICAgYXNzZXJ0ISgKICAgICAgICBzdGRlcnIuY29udGFpbnMoIlRSRUxMSVNfQ09OVFJBQ1RfSUQiKSB8fCBzdGRlcnIuY29udGFpbnMoImVudmlyb25tZW50IiksCiAgICAgICAgImVycm9yIHNob3VsZCBtZW50aW9uIG1pc3NpbmcgZW52aXJvbm1lbnQgdmFyaWFibGVcbnN0ZGVycjoge30iLAogICAgICAgIHN0ZGVycgogICAgKTsKfQoKLy8gLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLQovLyAjNDA2OiAtLWRyeS1ydW4gbXVzdCBub3QgcmVxdWlyZSB0aGUgc3RlbGxhciBiaW5hcnkKLy8gLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLQoKLy8vIENvbmZpcm1zIHRoYXQgYC0tZHJ5LXJ1bmAgcHJpbnRzIGEgY29tbWFuZCBwcmV2aWV3IGFuZCBleGl0cyAwIGV2ZW4gd2hlbgovLy8gdGhlIGBzdGVsbGFyYCBiaW5hcnkgaXMgY29tcGxldGVseSBhYnNlbnQgZnJvbSBQQVRILgovLy8KLy8vIFRoaXMgaXMgdGhlIGNvcmUgcmVncmVzc2lvbiB0ZXN0IGZvciBpc3N1ZSAjNDA2OiBgdmFsaWRhdGVfZW52aXJvbm1lbnQoKQovLy8gbXVzdCBiZSBza2lwcGVkIGZvciBkcnktcnVuIGludm9jYXRpb25zLgojW3Rlc3RdCmZuIHRlc3RfZHJ5X3J1bl93b3Jrc193aXRob3V0X3N0ZWxsYXJfYmluYXJ5KCkgewogICAgbGV0IG91dHB1dCA9IENvbW1hbmQ6Om5ldygiY2FyZ28iKQogICAgICAgIC5hcmdzKFsKICAgICAgICAgICAgInJ1biIsICItLXF1aWV0IiwgIi0tIiwKICAgICAgICAgICAgImxvY2siLAogICAgICAgICAgICAiLS1hZ3JlZW1lbnQtaWQiLCAiMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDEiLAogICAgICAgICAgICAiLS1taWxlc3RvbmUtaWQiLCAiMCIsCiAgICAgICAgICAgICItLWRyeS1ydW4iLAogICAgICAgIF0pCiAgICAgICAgLy8gV2lwZSBQQVRIIHNvIHRoZSBzdGVsbGFyIGJpbmFyeSBnZW51aW5lbHkgY2Fubm90IGJlIGZvdW5kLgogICAgICAgIC5lbnYoIlBBVEgiLCAiIikKICAgICAgICAuZW52KCJUUkVMTElTX0NPTlRSQUNUX0lEIiwgIkNCQ0RFRkdISUpLTE1OT1BRUlNUVVZXWFlaMjM0NTY3QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVoiKQogICAgICAgIC5lbnYoIlRSRUxMSVNfU09VUkNFX0tFWSIsICJTQkNERUZHSElKS0xNTk9QUVJTVFVWV1hZWjIzNDU2N0FCQ0RFRkdISUpLTE1OT1BRUlNUVVZXWFlaIikKICAgICAgICAuY3VycmVudF9kaXIoZW52Ojp2YXIoIkNBUkdPX01BTklGRVNUX0RJUiIpLnVud3JhcCgpKQogICAgICAgIC5vdXRwdXQoKQogICAgICAgIC5leHBlY3QoImZhaWxlZCB0byBzcGF3biB0cmVsbGlzIHByb2Nlc3MiKTsKCiAgICBhc3NlcnQhKAogICAgICAgIG91dHB1dC5zdGF0dXMuc3VjY2VzcygpLAogICAgICAgICItLWRyeS1ydW4gc2hvdWxkIHN1Y2NlZWQgZXZlbiB3aGVuIHN0ZWxsYXIgaXMgbm90IGluIFBBVEhcbnN0ZGVycjoge30iLAogICAgICAgIFN0cmluZzo6ZnJvbV91dGY4X2xvc3N5KCZvdXRwdXQuc3RkZXJyKQogICAgKTsKCiAgICBsZXQgc3Rkb3V0ID0gU3RyaW5nOjpmcm9tX3V0ZjhfbG9zc3koJm91dHB1dC5zdGRvdXQpOwogICAgYXNzZXJ0ISgKICAgICAgICBzdGRvdXQuY29udGFpbnMoInN0ZWxsYXIiKSB8fCBzdGRvdXQuY29udGFpbnMoImNvbnRyYWN0IikgfHwgc3Rkb3V0LmNvbnRhaW5zKCJpbnZva2UiKSwKICAgICAgICAiLS1kcnktcnVuIG91dHB1dCBzaG91bGQgY29udGFpbiBhIHN0ZWxsYXIgY29tbWFuZCBwcmV2aWV3XG5zdGRvdXQ6IHt9IiwKICAgICAgICBzdGRvdXQKICAgICk7Cn0KCi8vLyBBZGphY2VudCByZWdyZXNzaW9uIHRlc3Q6IHdpdGhvdXQgYC0tZHJ5LXJ1bmAsIHRoZSBiaW5hcnkgY2hlY2sgbXVzdCBzdGlsbAovLy8gZmlyZSBhbmQgcHJvZHVjZSBhIGNsZWFyIGVycm9yIG1lc3NhZ2Ugd2hlbiBzdGVsbGFyIGlzIGFic2VudCBmcm9tIFBBVEguCi8vLwovLy8gVGhpcyBndWFyZHMgYWdhaW5zdCBhY2NpZGVudGFsbHkgcmVtb3ZpbmcgdGhlIGNoZWNrIGZvciBub24tZHJ5LXJ1biBwYXRocwovLy8gd2hpbGUgZml4aW5nICM0MDYuCiNbdGVzdF0KZm4gdGVzdF9ub25fZHJ5X3J1bl9zdGlsbF9yZXF1aXJlc19zdGVsbGFyX2JpbmFyeSgpIHsKICAgIGxldCBvdXRwdXQgPSBDb21tYW5kOjpuZXcoImNhcmdvIikKICAgICAgICAuYXJncyhbCiAgICAgICAgICAgICJydW4iLCAiLS1xdWlldCIsICItLSIsCiAgICAgICAgICAgICJzdGF0dXMiLAogICAgICAgICAgICAiLS1hZ3JlZW1lbnQtaWQiLCAiMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDEiLAogICAgICAgIF0pCiAgICAgICAgLy8gV2lwZSBQQVRIIHNvIHRoZSBzdGVsbGFyIGJpbmFyeSBjYW5ub3QgYmUgZm91bmQuCiAgICAgICAgLmVudigiUEFUSCIsICIiKQogICAgICAgIC5lbnYoIlRSRUxMSVNfQ09OVFJBQ1RfSUQiLCAiQ0JDREVGR0hJSktMTU5PUFFSU1RVVldYWVoyMzQ1NjdBQkNERUZHSElKS0xNTk9QUVJTVFVWV1hZWiIpCiAgICAgICAgLmVudigiVFJFTExJU19TT1VSQ0VfS0VZIiwgIlNCQ0RFRkdISUpLTE1OT1BRUlNUVVZXWFlaMjM0NTY3QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVoiKQogICAgICAgIC5jdXJyZW50X2R pcihlbnY6OnZhcigiQ0FSR09fTUFOSUZFU1RfRElSIikudW53cmFwKCkpCiAgICAgICAgLm91dHB1dCgpCiAgICAgICAgLmV4cGVjdCgiZmFpbGVkIHRvIHNwYXduIHRyZWxsaXMgcHJvY2VzcyIpOwoKICAgIGFzc2VydCEoCiAgICAgICAgIW91dHB1dC5zdGF0dXMuc3VjY2VzcygpLAogICAgICAgICJub24tZHJ5LXJ1biBzaG91bGQgZmFpbCB3aGVuIHN0ZWxsYXIgaXMgbm90IGluIFBBVEgiCiAgICApOwoKICAgIGxldCBzdGRlcnIgPSBTdHJpbmc6OmZyb21fdXRmOF9sb3NzeSgmb3V0cHV0LnN0ZGVycik7CiAgICBhc3NlcnQhKAogICAgICAgIHN0ZGVyci5jb250YWlucygic3RlbGxhciIpIHx8IHN0ZGVyci5jb250YWlucygibm90IGZvdW5kIikgfHwgc3RkZXJyLmNvbnRhaW5zKCJpbnN0YWxsIiksCiAgICAgICAgImVycm9yIG1lc3NhZ2Ugc2hvdWxkIG1lbnRpb24gdGhlIG1pc3Npbmcgc3RlbGxhciBiaW5hcnlcbnN0ZGVycjoge30iLAogICAgICAgIHN0ZGVycgogICAgKTsKfQoKLy8gLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLQovLyBDb21tYW5kLXNwZWNpZmljIHRlc3RzCi8vIC0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0KCiNbdGVzdF0KZm4gdGVzdF9pbml0X3dpdGhfbXVsdGlwbGVfbWlsZXN0b25lcygpIHsKICAgIGxldCBvdXRwdXQgPSB0cmVsbGlzX2NtZCgpCiAgICAgICAgLmFyZ3MoWwogICAgICAgICAgICAiaW5pdCIsCiAgICAgICAgICAgICItLWFncmVlbWVudC1pZCIsICIwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAyIiwKICAgICAgICAgICAgIi0tcGF5ZXIiLCAiR0JDREVGR0hJSktMTU5PUFFSU1RVVldYWVoyMzQ1NjdBQkNERUZHSElKS0xNTk9QUVJTVFVWVyIsCiAgICAgICAgICAgICItLXBheWVlIiwgIkdaWVhXVlVUU1JRUE9OTUxLSklIR0ZFRENCQTIzNDU2N1pZWFdWVVRTUlFQT05NTEtKSUhHRiIsCiAgICAgICAgICAgICItLXRva2VuIiwgIkNCQ0RFRkdISUpLTE1OT1BRUlNUVVZXWFlaMjM0NTY3QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVoiLAogICAgICAgICAgICAiLS1yZXNvbHZlciIsICJHUkVTT0xWQUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVoyMzQ1NjdBQkNERUZHSElKS0xNTk8iLAogICAgICAgICAgICAiLS1hbW91bnRzIiwgIjEwMDAsMjAwMCwzMDAwLDQwMDAsNTAwMCIsCiAgICAgICAgICAgICItLWpzb24iCiAgICAgICAgXSkKICAgICAgICAub3V0cHV0KCkKICAgICAgICAuZXhwZWN0KCJmYWlsZWQgdG8gZXhlY3V0ZSB0cmVsbGlzIik7CgogICAgYXNzZXJ0ISgKICAgICAgICBvdXRwdXQuc3RhdHVzLnN1Y2Nlc3MoKSwKICAgICAgICAiaW5pdCB3aXRoIG11bHRpcGxlIG1pbGVzdG9uZXMgc2hvdWxkIHN1Y2NlZWRcbnN0ZGVycjoge30iLAogICAgICAgIFN0cmluZzo6ZnJvbV91dGY4X2xvc3N5KCZvdXRwdXQuc3RkZXJyKQogICAgKTsKfQoKI1t0ZXN0XQpmbiB0ZXN0X3N1Ym1pdF93b3JrX3dpdGhfcHJvb2ZfdXJpKCkgewogICAgbGV0IG91dHB1dCA9IHRyZWxsaXNfY21kKCkKICAgICAgICAuYXJncyhbCiAgICAgICAgICAgICJzdWJtaXQiLAogICAgICAgICAgICAiLS1hZ3JlZW1lbnQtaWQiLCAiMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDEiLAogICAgICAgICAgICAiLS1taWxlc3RvbmUtaWQiLCAiMCIsCiAgICAgICAgICAgICItLXByb29mLXVyaSIsICJpcGZzOi8vUW1UZXN0MTIzIiwKICAgICAgICAgICAgIi0tZHJ5LXJ1biIKICAgICAgICBdKQogICAgICAgIC5vdXRwdXQoKQogICAgICAgIC5leHBlY3QoImZhaWxlZCB0byBleGVjdXRlIHRyZWxsaXMiKTsKCiAgICBhc3NlcnQhKAogICAgICAgIG91dHB1dC5zdGF0dXMuc3VjY2VzcygpLAogICAgICAgICJzdWJtaXQgd2l0aCBwcm9vZi11cmkgc2hvdWxkIHN1Y2NlZWQgKGRyeS1ydW4pXG5zdGRlcnI6IHt9IiwKICAgICAgICBTdHJpbmc6OmZyb21fdXRmOF9sb3NzeSgmb3V0cHV0LnN0ZGVycikKICAgICk7Cn0KCiNbdGVzdF0KZm4gdGVzdF9yYWlzZV9kaXNwdXRlX3JlcXVpcmVzX2NhbGxlcigpIHsKICAgIGxldCBvdXRwdXQgPSB0cmVsbGlzX2NtZCgpCiAgICAgICAgLmFyZ3MoWwogICAgICAgICAgICAicmFpc2UtZGlzcHV0ZSIsCiAgICAgICAgICAgICItLWFncmVlbWVudC1pZCIsICIwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAxIiwKICAgICAgICAgICAgIi0tbWlsZXN0b25lLWlkIiwgIjAiLAogICAgICAgICAgICAiLS1yZWFzb24iLCAiV29yayBub3QgZGVsaXZlcmVkIiwKICAgICAgICAgICAgIi0tZHJ5LXJ1biIKICAgICAgICBdKQogICAgICAgIC5vdXRwdXQoKQogICAgICAgIC5leHBlY3QoImZhaWxlZCB0byBleGVjdXRlIHRyZWxsaXMiKTsKCiAgICBhc3NlcnQhKAogICAgICAgIG91dHB1dC5zdGF0dXMuc3VjY2VzcygpLAogICAgICAgICJyYWlzZS1kaXNwdXRlIHdpdGggcmVhc29uIHNob3VsZCBzdWNjZWVkIChkcnktcnVuKVxuc3RkZXJyOiB7fSIsCiAgICAgICAgU3RyaW5nOjpmcm9tX3V0ZjhfbG9zc3koJm91dHB1dC5zdGRlcnIpCiAgICApOwp9CgovLyAtLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tCi8vIE5hdGl2ZSBYRFIgcmVzdWx0IGRlY29kaW5nIGZvciByZWFkLW9ubHkgY29udHJhY3QgcXVlcmllcwoKLy8gLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLQoKLy8vIFRoZSBtb2NrIHN0ZWxsYXIgYmluYXJ5IGVtaXRzIGEgY2FwdHVyZWQgcmVhbCBYRFIgYFNjVmFsYCByZXN1bHQgZm9yCi8vLyBgZ2V0X2FncmVlbWVudGAgd2hlbiBgU1RFTExBUl9NT0NLX1hEUl9SRVNQT05TRWAgaXMgc2V0LiBUaGUgQ0xJIG11c3QKLy8vIGRlY29kZSB0aGF0IFhEUiBuYXRpdmVseSBpbnRvIHRoZSBzYW1lIEpTT04gc2hhcGUgdGhlIGh1bWFuLXJlYWRhYmxlCi8vLyBwYXRoIHByb2R1Y2VzLCB3aXRob3V0IHNoZWxsaW5nIG91dCB0byBgc3RlbGxhciBjb250cmFjdCByZWFkYCdzIG93bgovLy8gZGVjb2RpbmcuCiNbdGVzdF0KZm4gdGVzdF9zdGF0dXNfZGVjb2Rlc19uYXRpdmVfeGRyX3Jlc3VsdCgpIHsKICAgIGxldCBvdXRwdXQgPSB0cmVsbGlzX2NtZCgpCiAgICAgICAgLmFyZ3MoWwogICAgICAgICAgICAic3RhdHVzIiwKICAgICAgICAgICAgIi0tYWdyZWVtZW50LWlkIiwgIjAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDEiLAogICAgICAgICAgICAiLS1qc29uIgogICAgICAgIF0pCiAgICAgICAgLmVudigiU1RFTExBUl9NT0NLX1hEUl9SRVNQT05TRSIsICJ0cnVlIikKICAgICAgICAub3V0cHV0KCkKICAgICAgICAuZXhwZWN0KCJmYWlsZWQgdG8gZXhlY3V0ZSB0cmVsbGlzIik7CgogICAgYXNzZXJ0ISgKICAgICAgICBvdXRwdXQuc3RhdHVzLnN1Y2Nlc3MoKSwKICAgICAgICAic3RhdHVzIHdpdGggWERyIHJlc3VsdCBzaG91bGQgc3VjY2VlZFxuc3RkZXJyOiB7fSIsCiAgICAgICAgU3RyaW5nOjpmcm9tX3V0ZjhfbG9zc3koJm91dHB1dC5zdGRlcnIpCiAgICApOwoKICAgIGxldCBzdGRvdXQgPSBTdHJpbmc6OmZyb21fdXRmOF9sb3NzeSgmb3V0cHV0LnN0ZG91dCk7CiAgICBsZXQganNvbjogc2VyZGVfanNvbjo6VmFsdWUgPSBzZXJkZV9qc29uOjpmcm9tX3N0cihzdGRvdXQudHJpbSgpKQogICAgICAgIC5leHBlY3QoIm5hdGl2ZSBYRFIgZGVjb2RpbmcgbXVzdCBwcm9kdWNlIHZhbGlkIEpTT04iKTsKCiAgICAvLyBUaGUgZGVjb2RlZCBhZ3JlZW1lbnQgbXVzdCBleHBvc2UgdGhlIGZpZWxkcyB0aGUgQ0xJJ3MgaW50ZXJuYWwKICAgIC8vIHJlcHJlc2VudGF0aW9uIHVzZXMgZm9yIGByZW5kZXJfanNvbmAvYHJlbmRlcl9odW1hbmAuCiAgICBhc3NlcnQhKAogICAgICAgIGpzb24uZ2V0KCJhZ3JlZW1lbnRfaWQiKS5hbmQoJnwvdikuY29uZGl0aW9uKHx2fCB2LmlzX3N0cmluZygpKS5pc19zb21lKCksCiAgICAgICAgImRlY29kZWQgSlNPTiBzaG91bGQgaW5jbHVkZSBhZ3JlZW1lbnRfaWRcbnN0ZG91dDoge30iLAogICAgICAgIHN0ZG91dAogICAgKTsKICAgIGFzc2VydCEoCiAgICAgICAganNvbi5nZXQoInBheWVyIikuYW5kKCZ8dnwgdjppc19zdHJpbmcoKSkuaXNfc29tZSgpLAogICAgICAgICJkZWNvZGVkIEpTT04gc2hvdWxkIGluY2x1ZGUgcGF5ZXJcbnN0ZG91dDoge30iLAogICAgICAgIHN0ZG91dAogICAgKTsKICAgIGFzc2VydCEoCiAgICAgICAganNvbi5nZXQoInBheWVlIikuYW5kKCZ8dnwgdjppc19zdHJpbmcoKSkuaXNfc29tZSgpLAogICAgICAgICJkZWNvZGVkIEpTT04gc2hvdWxkIGluY2x1ZGUgcGF5ZWVcbnN0ZG91dDoge30iLAogICAgICAgIHN0ZG91dAogICAgKTsKICAgIGFzc2VydCEoCiAgICAgICAganNvbi5nZXQoIm1pbGVzdG9uZXMiKS5hbmQoJnwvdikuY29uZGl0aW9uKHx2fCB2LmlzX2FycmF5KCkpLmlzX3NvbWUoKSwKICAgICAgICAiZGVjb2RlZCBKU09OIHNob3VsZCBpbmNsdWRlIG1pbGVzdG9uZXMgYXJyYXlcbnN0ZG91dDoge30iLAogICAgICAgIHN0ZG91dAogICAgKTsKfQoKLy8vIEFkamFjZW50IHJlZ3Jlc3Npb24gdGVzdDogd2hlbiB0aGUgY29udHJhY3QgcmV0dXJucyBhbiBlcnJvciBgU2NWYWxgCi8vLyAob3IgdGhlIG1vY2sgZW1pdHMgYSBtYWxmb3JtZWQgWERyIGJsb2IpLCB0aGUgQ0xJIG11c3QgZmFpbCB3aXRoIGEK Ly8vIGNsZWFyIG1lc3NhZ2UgcmF0aGVyIHRoYW4gc2lsZW50bHkgcHJpbnRpbmcgZ2FyYmFnZSBvciBwYW5pY2tpbmcuCiNbdGVzdF0KZm4gdGVzdF9zdGF0dXNfcmVwb3J0c19tYWxmb3JtZWRfeGRyX3Jlc3VsdCgpIHsKICAgIGxldCBvdXRwdXQgPSB0cmVsbGlzX2NtZCgpCiAgICAgICAgLmFyZ3MoWwogICAgICAgICAgICAic3RhdHVzIiwKICAgICAgICAgICAgIi0tYWdyZWVtZW50LWlkIiwgIjAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDEiLAogICAgICAgICAgICAiLS1qc29uIgogICAgICAgIF0pCiAgICAgICAgLmVudigiU1RFTExBUl9NT0NLX1hEUl9SRVNQT05TRSIsICJtYWxmb3JtZWQiKQogICAgICAgIC5vdXRwdXQoKQogICAgICAgIC5leHBlY3QoImZhaWxlZCB0byBleGVjdXRlIHRyZWxsaXMiKTsKCiAgICBhc3NlcnQhKAogICAgICAgICFvdXRwdXQuc3RhdHVzLnN1Y2Nlc3MoKSwKICAgICAgICAibWFsZm9ybWVkIFhEciByZXN1bHQgc2hvdWxkIGZhaWwiCiAgICApOwoKICAgIGxldCBzdGRlcnIgPSBTdHJpbmc6OmZyb21fdXRmOF9sb3NzeSgmb3V0cHV0LnN0ZGVycik7CiAgICBhc3NlcnQhKAogICAgICAgIHN0ZGVyci5jb250YWlucygiWERyIikgfHwgc3RkZXJyLmNvbnRhaW5zKCJkZWNvZGUiKSB8fCBzdGRlcnIuY29udGFpbnMoImludmFsaWQiKSwKICAgICAgICAiZXJyb3Igc2hvdWxkIG1lbnRpb24gWERyIGRlY29kaW5nIGZhaWx1cmVcbnN0ZGVycjoge30iLAogICAgICAgIHN0ZGVycgogICAgKTsKfQo=
+// CLI integration tests using a mock stellar binary.
+//
+// These tests verify argument parsing, error handling, output formatting,
+// and JSON serialization without requiring a live Soroban network.
+//
+// Run with:
+//   cargo test --test cli_integration
+
+use std::process::Command;
+use std::env;
+
+// -----------------------------------------------------------------------------
+// Test helpers
+// -----------------------------------------------------------------------------
+
+/// Path to the mock stellar binary script
+fn mock_stellar_path() -> String {
+    let manifest_dir = env::var("CARGO_MANIFEST_DIR").unwrap();
+    format!("{}/tests/mock_stellar.sh", manifest_dir)
+}
+
+/// Build a trellis CLI invocation with the mock stellar binary
+fn trellis_cmd() -> Command {
+    let mut cmd = Command::new("cargo");
+    cmd.args(["run", "--quiet", "--"])
+        .env("TRELLIS_TEST_MODE", "true")
+        .env("STELLAR_MOCK_BIN", mock_stellar_path())
+        .env("TRELLIS_CONTRACT_ID", "CBCDEFGHIJKLMNOPQRSTUVWXYZ234567ABCDEFGHIJKLMNOPQRSTUVWXYZ")
+        .env("TRELLIS_SOURCE_KEY", "SBCDEFGHIJKLMNOPQRSTUVWXYZ234567ABCDEFGHIJKLMNOPQRSTUVWXYZ");
+    cmd
+}
+
+// -----------------------------------------------------------------------------
+// Argument parsing tests
+// -----------------------------------------------------------------------------
+
+#[test]
+fn test_init_parses_all_required_args() {
+    let output = trellis_cmd()
+        .args([
+            "init",
+            "--agreement-id", "000000000000000000000000000000000000000000000000000000000000000001",
+            "--payer", "GBCDEFGHIJKLMNOPQRSTUVWXYZ234567ABCDEFGHIJKLMNOPQRSTUW",
+            "--payee", "GZYWWVUXSTRQPONMLKJIHGFEDCBA234567ZYWWVUXSTRQPONMLKJIHGF",
+            "--token", "CBCDEFGHIJKLMNOPQRSTUVWXYZ234567ABCDEFGHIJKLMNOPQRSTUVWXYZ",
+            "--resolver", "GRESOLVABCDEFGHIJKLMNOPQRSTUVWXYZ234567ABCDEFGHIJKLMNO",
+            "--amounts", "1000,2000,3000",
+            "--dry-run"
+        ])
+        .output()
+        .expect("failed to execute trellis");
+
+    assert!(
+        output.status.success(),
+        "init with all required args should succeed (dry-run)\nstderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn test_lock_funds_parses_required_args() {
+    let output = trellis_cmd()
+        .args([
+            "lock",
+            "--agreement-id", "000000000000000000000000000000000000000000000000000000000000000001",
+            "--milestone-id", "0",
+            "--dry-run"
+        ])
+        .output()
+        .expect("failed to execute trellis");
+
+    assert!(
+        output.status.success(),
+        "lock with required args should succeed (dry-run)\nstderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn test_status_requires_agreement_id() {
+    let output = trellis_cmd()
+        .args(["status"])
+        .output()
+        .expect("failed to execute trellis");
+
+    assert!(
+        !output.status.success(),
+        "status without --agreement-id should fail"
+    );
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("agreement-id") || stderr.contains("required"),
+        "error message should mention missing agreement-id"
+    );
+}
+
+// -----------------------------------------------------------------------------
+// Output format tests
+// -----------------------------------------------------------------------------
+
+#[test]
+fn test_json_output_format() {
+    let output = trellis_cmd()
+        .args([
+            "status",
+            "--agreement-id", "000000000000000000000000000000000000000000000000000000000000000001",
+            "--json"
+        ])
+        .output()
+        .expect("failed to execute trellis");
+
+    assert!(
+        output.status.success(),
+        "status --json should succeed\nstderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains('{') && stdout.contains('}'),
+        "JSON output should contain braces"
+    );
+
+    // Validate it's parseable JSON
+    let result: Result<serde_json::Value, _> = serde_json::from_str(&stdout);
+    assert!(
+        result.is_ok(),
+        "JSON output should be valid JSON\nstdout: {}",
+        stdout
+    );
+}
+
+#[test]
+fn test_quiet_mode_suppresses_non_result_output() {
+    let output = trellis_cmd()
+        .args([
+            "status",
+            "--agreement-id", "000000000000000000000000000000000000000000000000000000000000000001",
+            "--quiet"
+        ])
+        .output()
+        .expect("failed to execute trellis");
+
+    assert!(
+        output.status.success(),
+        "status --quiet should succeed\nstderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    // In quiet mode, we should only get the JSON result, no other messages
+    assert!(
+        !stdout.contains("Invoking") && !stdout.contains("Success"),
+        "quiet mode should suppress non-result messages"
+    );
+}
+
+// -----------------------------------------------------------------------------
+// Error path tests
+// -----------------------------------------------------------------------------
+
+#[test]
+fn test_missing_stellar_binary_error() {
+    // Temporarily unset the mock binary to simulate stellar not being in PATH
+    let output = Command::new("cargo")
+        .args(["run", "--quiet", "--", "status", "--agreement-id", "0001"])
+        .env_remove("STELLAR_MOCK_BIN")
+        .env_remove("PATH")  // Remove PATH to ensure stellar is not found
+        .env("TRELLIS_CONTRACT_ID", "CBCDEFGHIJKLMNOPQRSTUVWXYZ234567ABCDEFGHIJKLMNOPQRSTUVWXYZ")
+        .output()
+        .expect("failed to execute trellis");
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    
+    // The error should mention stellar CLI not being found
+    assert!(
+        stderr.contains("stellar") || stderr.contains("not found") || stderr.contains("install"),
+        "error should mention stellar CLI\nstderr: {}",
+        stderr
+    );
+}
+
+#[test]
+fn test_invalid_hex_agreement_id() {
+    let output = trellis_cmd()
+        .args([
+            "status",
+            "--agreement-id", "not-valid-hex",
+            "--dry-run"
+        ])
+        .output()
+        .expect("failed to execute trellis");
+
+    // Should fail with helpful error about hex format
+    assert!(
+        !output.status.success(),
+        "invalid hex agreement-id should fail"
+    );
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("hex") || stderr.contains("invalid") || stderr.contains("format"),
+        "error should mention invalid hex format\nstderr: {}",
+        stderr
+    );
+}
+
+#[test]
+fn test_missing_required_env_vars() {
+    let output = Command::new("cargo")
+        .args(["run", "--quiet", "--", "status", "--agreement-id", "0001"])
+        .env_remove("TRELLIS_CONTRACT_ID")
+        .env_remove("TRELLIS_SOURCE_KEY")
+        .output()
+        .expect("failed to execute trellis");
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    
+    assert!(
+        stderr.contains("TRELLIS_CONTRACT_ID") || stderr.contains("environment"),
+        "error should mention missing environment variable\nstderr: {}",
+        stderr
+    );
+}
+
+// -----------------------------------------------------------------------------
+// #406: --dry-run must not require the stellar binary
+// -----------------------------------------------------------------------------
+
+/// Confirms that `--dry-run` prints a command preview and exits 0 even when
+/// the `stellar` binary is completely absent from PATH.
+///
+/// This is the core regression test for issue #406: `validate_environment()`
+/// must be skipped for dry-run invocations.
+#[test]
+fn test_dry_run_works_without_stellar_binary() {
+    let output = Command::new("cargo")
+        .args([
+            "run", "--quiet", "--",
+            "lock",
+            "--agreement-id", "000000000000000000000000000000000000000000000000000000000000000001",
+            "--milestone-id", "0",
+            "--dry-run",
+        ])
+        // Wipe PATH so the stellar binary genuinely cannot be found.
+        .env("PATH", "")
+        .env("TRELLIS_CONTRACT_ID", "CBCDEFGHIJKLMNOPQRSTUVWXYZ234567ABCDEFGHIJKLMNOPQRSTUVWXYZ")
+        .env("TRELLIS_SOURCE_KEY", "SBCDEFGHIJKLMNOPQRSTUVWXYZ234567ABCDEFGHIJKLMNOPQRSTUVWXYZ")
+        .current_dir()
+        .output()
+        .expect("failed to spawn trellis process");
+
+    assert!(
+        output.status.success(),
+        "--dry-run should succeed even when stellar is not in PATH\nstderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("stellar") || stdout.contains("contract") || stdout.contains("invoke"),
+        "--dry-run output should contain a stellar command preview\nstdout: {}",
+        stdout
+    );
+}
+
+/// Adjacent regression test: without `--dry-run`, the binary check must still
+/// fire and produce a clear error message when stellar is absent from PATH.
+///
+/// This guards against accidentally removing the check for non-dry-run paths
+/// while fixing #406.
+#[test]
+fn test_non_dry_run_still_requires_stellar_binary() {
+    let output = Command::new("cargo")
+        .args([
+            "run", "--quiet", "--",
+            "status",
+            "--agreement-id", "000000000000000000000000000000000000000000000000000000000000000001",
+        ])
+        // Wipe PATH so the stellar binary cannot be found.
+        .env("PATH", "")
+        .env("TRELLIS_CONTRACT_ID", "CBCDEFGHIJKLMNOPQRSTUVWXYZ234567ABCDEFGHIJKLMNOPQRSTUVWXYZ")
+        .env("TRELLIS_SOURCE_KEY", "SBCDEFGHIJKLMNOPQRSTUVWXYZ234567ABCDEFGHIJKLMNOPQRSTUVWXYZ")
+        .current_dir()
+        .output()
+        .expect("failed to spawn trellis process");
+
+    assert!(
+        !output.status.success(),
+        "non-dry-run should fail when stellar is not in PATH"
+    );
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("stellar") || stderr.contains("not found") || stderr.contains("install"),
+        "error message should mention the missing stellar binary\nstderr: {}",
+        stderr
+    );
+}
+
+// -----------------------------------------------------------------------------
+// Command-specific tests
+// -----------------------------------------------------------------------------
+
+#[test]
+fn test_init_with_multiple_milestones() {
+    let output = trellis_cmd()
+        .args([
+            "init",
+            "--agreement-id", "000000000000000000000000000000000000000000000000000000000000000002",
+            "--payer", "GBCDEFGHIJKLMNOPQRSTUVWXYZ234567ABCDEFGHIJKLMNOPQRSTUW",
+            "--payee", "GZYXWWVUXSTRQPONMLKJIHGFEDCBA234567ZYWWVUXSTRQPONMLKJIHGF",
+            "--token", "CBCDEFGHIJKLMNOPQRSTUVWXYZ234567ABCDEFGHIJKLMNOPQRSTUVWXYZ",
+            "--resolver", "GRESOLVABCDEFGHIJKLMNOPQRSTUVWXYZ234567ABCDEFGHIJKLMNO",
+            "--amounts", "1000,2000,3000,4000,5000",
+            "--json"
+        ])
+        .output()
+        .expect("failed to execute trellis");
+
+    assert!(
+        output.status.success(),
+        "init with multiple milestones should succeed\nstderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn test_submit_work_with_proof_uri() {
+    let output = trellis_cmd()
+        .args([
+            "submit",
+            "--agreement-id", "000000000000000000000000000000000000000000000000000000000000000001",
+            "--milestone-id", "0",
+            "--proof-uri", "ipfs://QmTest123",
+            "--dry-run"
+        ])
+        .output()
+        .expect("failed to execute trellis");
+
+    assert!(
+        output.status.success(),
+        "submit with proof-uri should succeed (dry-run)\nstderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn test_raise_dispute_requires_caller() {
+    let output = trellis_cmd()
+        .args([
+            "raise-dispute",
+            "--agreement-id", "000000000000000000000000000000000000000000000000000000000000000001",
+            "--milestone-id", "0",
+            "--reason", "Work not delivered",
+            "--dry-run"
+        ])
+        .output()
+        .expect("failed to execute trellis");
+
+    assert!(
+        output.status.success(),
+        "raise-dispute with required args should succeed (dry-run)\nstderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+// -----------------------------------------------------------------------------
+// Native XDR result decoding for read-only contract queries
+// -----------------------------------------------------------------------------
+//
+// The mock stellar binary emits a captured real XDR `ScVal` result for
+// `get_agreement` and `get_milestone`. The CLI must decode that XDR
+// natively into its existing JSON shape rather than re-printing the
+// `stellar` CLI's own decoded stdout.
+
+/// The exact agreement ID the mock returns a captured XDRR result for.
+const FIXTURE_AGREEMENT_ID : &str =
+    "000000000000000000000000000000000000000000000000000000000000000001";
+
+/// The amounts the fixture agreement was initialized with.
+const FIXTURE_AMOUNTS: [&str; 3] = ["1000", "2000", "3000"];
+
+/// The addresses the fixture agreement references.
+const FIXTURE_PAYER: &str =
+    "GBCDEFGHIJKLMNOPQRSTUVWXYZ234567ABCDEFGHIJKLMNOPQRSTUW";
+const FIXTURE_PAYEE: &str =
+    "GZYWWVUXSTRQPONMLKJIHGFEDCBA234567ZYWWVUXSTRQPONMLKJIHGF";
+const FIXTURE_TOKEN: &str =
+    "CBCDEFGHIJKLMNOPQRSTUVWXYZ234567ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+const FIXTURE_RESOLVER: &str =
+    "GRESOLVABCDEFGHIJKLMNOPQRSTUVWXYZ234567ABCDEFGHIJKLMNO";
+
+/// Run `status --json` against the fixture agreement and parse the JSON.
+fn run_status_json(agreement_id: &str) -> serde_json::Value {
+    let output = trellis_cmd()
+        .args(["status", "--agreement-id", agreement_id, "--json"])
+        .output()
+        .expect("failed to execute trellis");
+
+    assert!(
+        output.status.success(),
+        "status --json should succeed\nstderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    serde_json::from_str(&stdout).unwrap_or_else|| {
+        panic!("status --json must emit valid JSON, got: {stdout}")
+    }
+}
+
+/// The specific case this issue describes: `get_agreement` returns a
+/// raw XDR `ScVal` which must be decoded natively into the CLI's JSON
+/// shape.
+#[test]
+fn test_status_decodes_get_agreement_xdr_result() {
+    let json = run_status_json(FIXTURE_AGREEMENT_ID);
+
+    // Top-level shape must match the existing render_json contract.
+    assert_eq!(
+        json.get("agreement_id").and_then(|v| v.as_str()),
+        Some(FIXTURE_AGREEMENT_ID),
+        "decoded agreement_id must match the requested agreement"
+    );
+    assert_eq(
+        json.get("payer").and_then(|v| v.as_str()),
+        Some(FIXTURE_PAYER),
+        "decoded payer must match the on-chain agreement"
+    );
+    assert_eq!(
+        json.get("payee").and_then(|v| v.as_str()),
+        Some(FIXTURE_PAYEE),
+        "decoded payee must match the on-chain agreement"
+    );
+    assert_eq!(
+        json.get("token").and_then(|v| v.as_str()),
+        Some(FIXTURE_TOKEN),
+        "decoded token must match the on-chain agreement"
+    );
+    assert_eq!(
+        json.get("resolver").and_then(|v| v.as_str()),
+        Some(FIXTURE_RESOLVER),
+        "decoded resolver must match the on-chain agreement"
+    );
+
+    // Milestones array must be decoded from the XDR vector.
+    let milestones = json
+        .get("milestones")
+        .and_then(v| v.as_array())
+        .expect("decoded agreement must expose a milestones array");
+    assert_eq!(
+        milestones.len(),
+        FIXTURE_AMOUNTS.len(),
+        "decoded milestone count must match the on-chain array"
+    );
+
+    for (i, expected_amount) in FIXTURE_AMOUNTS.iter().enumerate() {
+        let milestone = &milestones[i];
+        assert_eq!(
+            milestone.get("id").and_then(|v| v.as_u64()),
+            Some(i as u64),
+            "milestone {i} id must match its position in the decoded vector"
+        );
+        assert_eq!(
+            milestone.get("amount").and_then(|v| v.as_str()),
+            Some(*expected_amount),
+            "milestone {i} amount must match the on-chain value"
+        );
+    }
+}
+
+/// Adjacent case: `get_milestone` returns a single XDR `ScVal` that must
+/// be decoded into the same milestone shape used by the agreement result.
+/// This guards against a fix that only handles the agreement vector.
+#[test]
+fn test_milestone_status_decodes_get_milestone_xdr_result() {
+    let output = trellis_cmd()
+        .args([
+            "milestone-status",
+            "--agreement-id", FIXTURE_AGREEMENT_ID,
+            "--milestone-id", "1",
+            "--json",
+        ])
+        .output()
+        .expect("failed to execute trellis");
+
+    assert!(
+        output.status.success(),
+        "milestone-status --json should succeed\nstderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let json = serde_json::from_str(&stdout).unwrap_or_else|| {
+        panic!("milestone-status --json must emit valid JSON, got: {stdout}")
+    });
+
+    assert_eq!(
+        json.get("agreement_id").and_then(|v| v.as_str()),
+        Some(FIXTURE_AGREEMENT_ID),
+        "decoded milestone result must carry the agreement id"
+    );
+    assert_eq!(
+        json.get("id").and_then(|v| v.as_u64()),
+        Some(1),
+        "decoded milestone id must match the requested milestone"
+    );
+    assert_eq!(
+        json.get("amount").and_then(|v| v.as_str()),
+        Some(FIXTURE_AMOUNTS[1]),
+        "decoded milestone amount must match the on-chain value"
+    );
+}
