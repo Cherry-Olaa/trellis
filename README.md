@@ -477,13 +477,36 @@ Trellis is a monorepo with three layers:
 | `init` | Payer | Creates a new agreement with one or more milestones (each `amount` must be strictly positive) |
 | `lock_funds` | Payer | Deposits funds for a milestone into the contract |
 | `submit_work` | Payee | Submits proof of completed work for a funded milestone |
-| `approve_and_release` | Payer | Approves submitted work, releases funds to payee |
+| `approve_and_release` | Payer | Approves submitted work, releases the remaining escrowed funds to payee |
+| `release_partial` | Payer | Releases part of a `Funded`/`WorkSubmitted` milestone's escrowed funds as a progress payment; the milestone completes once fully released |
 | `raise_dispute` | Payer or Payee | Flags a milestone for resolver review |
 | `resolve_dispute` | Dispute Resolver | Rules on a dispute — refunds payer or pays payee |
 | `cancel_unfunded_milestone` | Payer | Cancels a milestone that was never funded |
 | `get_agreement` | Anyone | Returns the full current state of an agreement (read-only) |
 | `get_total_amount` | Anyone | Returns the agreement's total value — sum of all milestone amounts (read-only) |
 | `extend_agreement_ttl` | Anyone | Renews an agreement's ledger TTL to avoid archival |
+
+<details>
+<summary>📡 <strong>Contract Events</strong></summary>
+<br />
+
+Every event is published with topics `(name, agreement_id)`. New fields are only ever appended to the end of a payload, so positional decoders keep working.
+
+| Topic | Emitted by | Data |
+|---|---|---|
+| `trls_crte` | `init` | `(payer, payee)` |
+| `trls_lckd` | `lock_funds`, `batch_lock_funds` | `(milestone_id, amount)` |
+| `trls_sbmt` | `submit_work` | `(milestone_id, proof_uri)` |
+| `trls_rlsd` | `approve_and_release` | `(milestone_id, amount)` — the remainder actually transferred |
+| `trls_prtl` | `release_partial` | `(milestone_id, amount, remaining)` |
+| `trls_dspt` | `raise_dispute` | `(milestone_id, caller, amount)` — escrowed amount at stake |
+| `trls_rslv` | `resolve_dispute` | `(milestone_id, refunded_to_payer, amount)` — escrowed amount moved |
+| `trls_cncl` | `cancel_unfunded_milestone` | `(milestone_id, payer, cancelled_by, amount)` — proposed amount, no tokens move |
+| `trls_cmpl` | whichever call settles the last open milestone | `(completed_count, refunded_count)` |
+| `trls_ttle` | `extend_agreement_ttl` | `(caller)` |
+
+`trls_cmpl` fires exactly once per agreement, right after the milestone event that moved its last milestone into a terminal state (`Completed` or `Refunded`, the latter including cancellations). It signals that the agreement is *settled*, not that every milestone was paid — use the two counts to tell the outcomes apart.
+</details>
 
 <details>
 <summary>📦 <strong>Storage Lifetime</strong></summary>

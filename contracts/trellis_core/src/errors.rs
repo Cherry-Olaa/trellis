@@ -101,4 +101,13 @@ pub enum TrellisError {
     /// integrator can tell "you sent a bad amount" from "you tried to
     /// pre-advance a milestone".
     InvalidInitialMilestoneStatus = 11,
+
+    /// `release_partial` was called with an amount that is zero, negative,
+    /// or larger than what is still held in escrow for the milestone.
+    ///
+    /// Distinct from [`TrellisError::InvalidMilestone`] (which covers a bad
+    /// milestone index or configured amount) so an integrator can tell "this
+    /// milestone does not exist" from "you asked to release more than is
+    /// left". Appended as discriminant `12` per the stability rule above.
+    InvalidReleaseAmount = 12,
 }
