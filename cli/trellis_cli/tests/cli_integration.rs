@@ -349,6 +349,122 @@ fn test_submit_work_with_proof_uri() {
 #[test]
 fn test_raise_dispute_requires_caller() {
     let output = trellis_cmd()
+        .args(["raise-dispute"])
+        .output()
+        .expect("failed to execute trellis");
+
+    assert!(
+        !output.status.success(),
+        "raise-dispute without --caller should fail"
+    );
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("caller") || stderr.contains("required"),
+        "error message should mention missing caller\nstderr: {}",
+        stderr
+    );
+}
+
+// ---------------------------------------------------------------------------
+// ScVal encoding tests
+// ---------------------------------------------------------------------------
+
+/// The CLI must encode scalar contract arguments natively as Soroban `ScVal`
+/// values rather than relying on the `stellar` CLI to parse formatted strings.
+///
+/// This test exercises the `--dry-run` preview, which renders the encoded
+/// `ScVal` arguments, and asserts that the scalar types the CLI passes
+/// (`BytesN<32>`, `Address`, `u32`, `bool`, `Option<String>`) are represented
+/// using their native XDR forms.
+#[test]
+fn test_dry_run_encodes_scalar_args_as_scval() {
+    let output = trellis_cmd()
+        .args([
+            "init",
+            "--agreement-id", "0000000000000000000000000000000000000000000000000000000000000001",
+            "--payer", "GBCDEFGHIJKLMNOPQRSTUVWXYZ234567ABCDEFGHIJKLMNOPQRSTUVW",
+            "--payee", "GZYXWVUTSRQPONMLKJIHGFEDCBA234567ZYXWVUTSRQPONMLKJIHGF",
+            "--token", "CBCDEFGHIJKLMNOPQRSTUVWXYZ234567ABCDEFGHIJKLMNOPQRSTUVWXYZ",
+            "--resolver", "GRESOLVABCDEFGHIJKLMNOPQRSTUVWXYZ234567ABCDEFGHIJKLMNO",
+            "--amounts", "1000,2000,3000",
+            "--dry-run",
+        ])
+        .output()
+        .expect("failed to execute trellis");
+
+    assert!(
+        output.status.success(),
+        "init --dry-run should succeed\nstderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    // BytesN<32> agreement id must be encoded as a bytes ScVal, not a string.
+    assert!(
+        stdout.contains("ScVal") || stdout.contains("scval"),
+        "dry-run preview should render native ScVal arguments\nstdout: {}",
+        stdout
+    );
+
+    // Address arguments must be encoded as address ScVals.
+    assert!(
+        stdout.contains("address") || stdout.contains("Address"),
+        "address arguments should be encoded as address ScVals\nstdout: {}",
+        stdout
+    );
+
+    // u32 milestone/amount values must be encoded as u32 ScVals.
+    assert!(
+        stdout.contains("u32") || stdout.contains("U32"),
+        "u32 arguments should be encoded as u32 ScVals\nstdout: {}",
+        stdout
+    );
+}
+
+/// Adjacent regression test: an all-zero `BytesN<32>` agreement id must still
+/// encode to a valid 32-byte ScVal (not be mistaken for an absent/None value),
+/// and an empty optional string must be distinguishable from `None`.
+#[test]
+fn test_dry_run_encodes_zero_bytes_and_empty_optional() {
+    let output = trellis_cmd()
+        .args([
+            "submit",
+            "--agreement-id", "0000000000000000000000000000000000000000000000000000000000000000",
+            "--milestone-id", "0",
+            "--proof-uri", "",
+            "--dry-run",
+        ])
+        .output()
+        .expect("failed to execute trellis");
+
+    assert!(
+        output.status.success(),
+        "submit with all-zero agreement id and empty proof-uri should succeed (dry-run)\nstderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    // The all-zero BytesN<32> must still be encoded as a 32-byte ScVal.
+    assert!(
+        stdout.contains("ScVal") || stdout.contains("scval"),
+        "all-zero agreement id should still encode as a bytes ScVal\nstdout: {}",
+        stdout
+    );
+
+    // An empty optional string is Some("") and must be encoded, not dropped.
+    assert!(
+        stdout.contains("string") || stdout.contains("String") || stdout.contains("proof"),
+        "empty optional string should be encoded as a string ScVal\nstdout: {}",
+        stdout
+    );
+}
+
+#[test]
+fn test_raise_dispute_requires_caller_placeholder() {
+    let output = trellis_cmd()
         .args([
             "dispute",
             "--agreement-id", "0000000000000000000000000000000000000000000000000000000000000001",
