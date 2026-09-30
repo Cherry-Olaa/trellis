@@ -3,6 +3,7 @@ mod config;
 mod input;
 mod rpc;
 mod sanitizer;
+mod strkey;
 mod utils;
 
 #[cfg(test)]
