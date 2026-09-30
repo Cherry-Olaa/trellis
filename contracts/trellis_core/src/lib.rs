@@ -352,9 +352,12 @@ impl TrellisContract {
 
     /// Settle a disputed milestone as the designated `dispute_resolver`.
     ///
-    /// Pass `refund_to_payer = true` to return funds to the payer
-    /// (ruling against the payee), or `false` to award funds to the payee
-    /// (ruling against the payer).
+    /// Pass `payer_amount` and `payee_amount` to split the milestone's locked
+    /// amount between the two parties. The two amounts must be non-negative
+    /// and sum exactly to the milestone's locked amount. Passing the full
+    /// amount to one side (`payer_amount = amount, payee_amount = 0` or
+    /// `payer_amount = 0, payee_amount = amount`) reproduces the previous
+    /// all-or-nothing behavior.
     ///
     /// # Auth
     /// `agreement.dispute_resolver.require_auth()` is the sole enforcement
@@ -368,11 +371,14 @@ impl TrellisContract {
     /// - [`TrellisError::AgreementNotFound`] – unknown agreement ID.
     /// - [`TrellisError::InvalidMilestone`] – `milestone_id` out of range.
     /// - [`TrellisError::InvalidStateTransition`] – milestone is not `Disputed`.
+    /// - [`TrellisError::InvalidSplitAmounts`] – `payer_amount` or
+    ///   `payee_amount` is negative, or the two do not sum to the locked amount.
     pub fn resolve_dispute(
         env: Env,
         agreement_id: BytesN<32>,
         milestone_id: u32,
-        refund_to_payer: bool,
+        payer_amount: i128,
+        payee_amount: i128,
     ) -> Result<(), TrellisError> {
         let mut agreement = storage::read_agreement(&env, &agreement_id)?;
 
@@ -391,7 +397,25 @@ impl TrellisContract {
         }
 
         let amount = milestone.amount;
-        if refund_to_payer {
+
+        // Validate the split: both legs must be non-negative and together
+        // account for exactly the locked amount. This is checked before any
+        // state write or token movement so an invalid split cannot leave the
+        // milestone in a half-resolved state.
+        if payer_amount < 0 || payee_amount < 0 {
+            return Err(TrellisError::InvalidSplitAmounts);
+        }
+        let total = payer_amount
+            .checked_add(payee_amount)
+            .ok_or(TrellisError::InvalidSplitAmounts)?;
+        if total != amount {
+            return Err(TrellisError::InvalidSplitAmounts);
+        }
+
+        // Status reflects the dominant outcome for indexers: a full refund to
+        // the payer is `Refunded`, anything else (including a full award to
+        // the payee or a genuine split) is `Completed`.
+        if payee_amount == 0 {
             milestone.status = EscrowStatus::Refunded;
         } else {
             milestone.status = EscrowStatus::Completed;
@@ -400,23 +424,25 @@ impl TrellisContract {
         agreement.milestones.set(milestone_id, milestone);
         storage::write_agreement(&env, &agreement_id, &agreement);
 
-        if refund_to_payer {
-            // Rule: payer wins — return locked funds to payer.
+        // Settle both legs in a single transaction. Zero-amount legs are
+        // skipped so we never issue a no-op transfer to the token contract.
+        let token = token::Client::new(&env, &agreement.token);
+        if payer_amount > 0 {
             token::Client::new(&env, &agreement.token).transfer(
                 &env.current_contract_address(),
                 &agreement.payer,
-                &amount,
+                &payer_amount,
             );
-        } else {
-            // Rule: payee wins — release locked funds to payee.
+        }
+        if payee_amount > 0 {
             token::Client::new(&env, &agreement.token).transfer(
                 &env.current_contract_address(),
                 &agreement.payee,
-                &amount,
+                &payee_amount,
             );
         }
 
-        events::milestone_resolved(&env, agreement_id, milestone_id, refund_to_payer);
+        events::milestone_resolved(&env, agreement_id, milestone_id, payer_amount, payee_amount);
 
         Ok(())
     }
