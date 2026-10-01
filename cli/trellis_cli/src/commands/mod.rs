@@ -1021,6 +1021,108 @@ fn build_milestones_json(csv: &str) -> Result<String, String> {
     Ok(format!("[{}]", entries.join(",")))
 }
 
+/// Build the full `Vec<Milestone>` argument as a native `ScVal` for the
+/// contract's `init` entry point.
+///
+/// This mirrors the contract's `#[contracttype]` layout exactly:
+/// - `Vec<Milestone>` → `ScVal::Vec(Some(ScVec))`
+/// - `Milestone` (struct) → `ScVal::Map(Some(ScMap))` with symbol keys
+/// - `id: u32` → `ScVal::U32`
+/// - `amount: i128` → `ScVal::I128(Parts { hi, lo })`
+/// - `status: EscrowStatus` → `ScVal::Vec(Some([Symbol("Pending")]))`
+/// - `proof_uri: Option<String>` → `ScVal::Void` (None)
+///
+/// The encoding is produced directly rather than round-tripping through the
+/// `stellar` CLI's JSON-to-XDR conversion, so the CLI no longer depends on
+/// that external tool for the milestone vector argument.
+fn build_milestones_scval(csv: &str) -> Result<soroban_sdk::xdr::ScVal, String> {
+    use soroban_sdk::xdr::{Int128Parts, ScMap, ScMapEntry, ScSymbol, ScVal, ScVec};
+
+    if csv.trim().is_empty() {
+        return Err(
+            "no milestone amounts provided — pass a comma-separated list of positive \
+             integers in the token's base unit, e.g. --milestones \"1000,2000,500\""
+                .to_string(),
+        );
+    }
+
+    let mut milestones: Vec<ScVal> = Vec::new();
+    for (idx, part) in csv.split(',').enumerate() {
+        let trimmed = part.trim();
+        if trimmed.is_empty() {
+            return Err(format!(
+                "empty milestone amount at index {idx} — remove the leading, trailing, \
+                 or doubled comma in \"{csv}\" (expected e.g. \"1000,2000,500\")"
+            ));
+        }
+        let amount: i128 = trimmed.parse().map_err(|_| {
+            format!(
+                "invalid milestone amount {:?} at index {} — expected a positive integer",
+                trimmed, idx
+            )
+        })?;
+        if amount <= 0 {
+            return Err(format!(
+                "milestone amount at index {} must be a positive integer, got {amount}",
+                idx
+            ));
+        }
+
+        let id_val = ScVal::U32(idx as u32);
+        let amount_val = ScVal::I128(Int128Parts {
+            hi: (amount >> 64) as i64,
+            lo: amount as u64,
+        });
+        let status_val = ScVal::Vec(Some(ScVec(
+            vec![ScVal::Symbol(ScSymbol("Pending".try_into().map_err(|_| {
+                "internal error: invalid status symbol".to_string()
+            })?))]
+            .try_into()
+            .map_err(|_| "internal error: status vec overflow".to_string())?,
+        )));
+        let proof_uri_val = ScVal::Void;
+
+        let fields: Vec<ScMapEntry> = vec![
+            ScMapEntry {
+                key: ScVal::Symbol(ScSymbol("id".try_into().map_err(|_| {
+                    "internal error: invalid field symbol".to_string()
+                })?)),
+                val: id_val,
+            },
+            ScMapEntry {
+                key: ScVal::Symbol(ScSymbol("amount".try_into().map_err(|_| {
+                    "internal error: invalid field symbol".to_string()
+                })?)),
+                val: amount_val,
+            },
+            ScMapEntry {
+                key: ScVal::Symbol(ScSymbol("status".try_into().map_err(|_| {
+                    "internal error: invalid field symbol".to_string()
+                })?)),
+                val: status_val,
+            },
+            ScMapEntry {
+                key: ScVal::Symbol(ScSymbol("proof_uri".try_into().map_err(|_| {
+                    "internal error: invalid field symbol".to_string()
+                })?)),
+                val: proof_uri_val,
+            },
+        ];
+
+        milestones.push(ScVal::Map(Some(ScMap(
+            fields
+                .try_into()
+                .map_err(|_| "internal error: milestone map overflow".to_string())?,
+        ))));
+    }
+
+    Ok(ScVal::Vec(Some(ScVec(
+        milestones
+            .try_into()
+            .map_err(|_| "internal error: milestone vec overflow".to_string())?,
+    ))))
+}
+
 /// Run an RPC invocation (or preview it, under `--dry-run`) and render the
 /// result according to `opts.format`.
 ///
