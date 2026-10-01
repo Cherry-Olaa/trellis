@@ -50,6 +50,30 @@ pub struct Milestone {
     /// representation of "no proof" — an empty `Some("")` is not a sentinel
     /// and callers should not construct one.
     pub proof_uri: Option<String>,
+    /// Optional split of this milestone's locked amount between payer and
+    /// payee, set when a dispute is resolved with a partial outcome.
+    ///
+    /// `None` means no split has been recorded (all-or-nothing resolution or
+    /// no dispute). When `Some`, `payer_amount + payee_amount` must equal
+    /// `amount` exactly.
+    pub split: Option<MilestoneSplit>,
+}
+
+// ---------------------------------------------------------------------------
+// Agreement — top-level escrow record stored on-chain
+//
+// See the note on [`Milestone`] for why `Eq`/`PartialEq` are derived: it lets a
+// whole agreement read back from `get_agreement` be asserted with one
+// `assert_eq!`, so no field can be added here without every existing equality
+// assertion noticing.
+// ---------------------------------------------------------------------------
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MilestoneSplit {
+    /// Portion of the milestone amount awarded back to the payer.
+    pub payer_amount: i128,
+    /// Portion of the milestone amount awarded to the payee.
+    pub payee_amount: i128,
 }
 
 // ---------------------------------------------------------------------------
