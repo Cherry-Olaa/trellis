@@ -1,4 +1,5 @@
 use crate::config::Config;
+use crate::commands::ContractResult;
 use governor::{Quota, RateLimiter};
 use std::io::Write;
 use std::num::NonZeroU32;
@@ -57,6 +58,266 @@ pub(crate) fn stellar_bin() -> String {
         }
     }
     "stellar".to_string()
+}
+
+/// Decode a base64-encoded Soroban `ScVal` XDR result into the CLI's
+/// internal `ContractResult` representation.
+///
+/// This is the native replacement for shelling out to `stellar contract
+/// invoke` and re-printing its stdout: callers that already have a raw XDR
+/// `ScVal` (e.g. from `simulateTransaction`) can decode it directly into the
+/// same shape `render_json` / `render_human` consume.
+///
+/// The decoder understands the two result shapes produced by the Trellis
+/// contract's read-only queries:
+///
+/// * `get_agreement` → a `ScVal::Map` with fields `id`, `payer`, `payee`,
+///   `amount`, `status`, `milestone_count`.
+/// * `get_milestone` → a `ScVal::Map` with fields `agreement_id`, `index`,
+///   `amount`, `status`, `released`.
+///
+/// Returns `Err` with a human-readable message when the XDR is malformed or
+/// the top-level value is not a map (so callers can surface a clear error
+/// instead of silently printing garbage).
+pub fn decode_scval_result(xdr_base64: &str) -> Result<ContractResult, String> {
+    let raw = base64_decode(xdr_base64)
+        .map_err(|e| format!("invalid base64 in ScVal result: {e}"))?;
+    let val = parse_scval(&raw)
+        .map_err(|e| format!("failed to parse ScVal XDR: {e}"))?;
+    scval_to_contract_result(&val)
+}
+
+/// Minimal base64 decoder (standard alphabet, `=` padding) so the CLI does
+/// not need an extra dependency just for result decoding.
+fn base64_decode(input: &str) -> Result<Vec<u8>, String> {
+    fn val(c: u8) -> Option<u8> {
+        match c {
+            b'A'..=b'Z' => Some(c - b'A'),
+            b'a'..=b'z' => Some(c - b'a' + 26),
+            b'0'..=b'9' => Some(c - b'0' + 52),
+            b'+' => Some(62),
+            b'/' => Some(63),
+            _ => None,
+        }
+    }
+    let bytes: Vec<u8> = input.bytes().filter(|b| !b.is_ascii_whitespace()).collect();
+    if bytes.len() % 4 != 0 {
+        return Err("length is not a multiple of 4".to_string());
+    }
+    let mut out = Vec::with_capacity(bytes.len() / 4 * 3);
+    for chunk in bytes.chunks(4) {
+        let pad = chunk.iter().filter(|&&b| b == b'=').count();
+        if pad > 2 {
+            return Err("too much padding".to_string());
+        }
+        let mut n: u32 = 0;
+        for (i, &b) in chunk.iter().enumerate() {
+            let v = if b == b'=' {
+                0
+            } else {
+                val(b).ok_or_else(|| format!("invalid base64 byte 0x{b:02x} at index {i}"))?
+            };
+            n = (n << 6) | v as u32;
+        }
+        out.push((n >> 16) as u8);
+        if pad < 2 {
+            out.push((n >> 8) as u8);
+        }
+        if pad < 1 {
+            out.push(n as u8);
+        }
+    }
+    Ok(out)
+}
+
+/// A parsed subset of the Soroban `ScVal` union — just enough to represent
+/// the values returned by `get_agreement` / `get_milestone`.
+#[derive(Debug, Clone, PartialEq)]
+enum ScVal {
+    Void,
+    Bool(bool),
+    U32(u32),
+    I32(i32),
+    U64(u64),
+    I64(i64),
+    U128(u128),
+    I128(i128),
+    Symbol(String),
+    String(String),
+    Bytes(Vec<u8>),
+    Address(String),
+    Map(Vec<(ScVal, ScVal)>),
+    Vec(Vec<ScVal>),
+}
+
+/// Parse a raw `ScVal` XDR blob into the local `ScVal` enum.
+///
+/// This is a deliberately small reader: it walks the XDR discriminant and
+/// payload for the variants the Trellis contract actually returns. Unknown
+/// discriminants produce an error rather than a silent mis-decode.
+fn parse_scval(bytes: &[u8]) -> Result<ScVal, String> {
+    let mut cur = std::io::Cursor::new(bytes);
+    read_scval(&mut cur)
+}
+
+fn read_u32(cur: &mut std::io::Cursor<&[u8]>) -> Result<u32, String> {
+    use std::io::Read;
+    let mut buf = [0u8; 4];
+    cur.read_exact(&mut buf)
+        .map_err(|e| format!("unexpected end of XDR: {e}"))?;
+    Ok(u32::from_be_bytes(buf))
+}
+
+fn read_u64(cur: &mut std::io::Cursor<&[u8]>) -> Result<u64, String> {
+    use std::io::Read;
+    let mut buf = [0u8; 8];
+    cur.read_exact(&mut buf)
+        .map_err(|e| format!("unexpected end of XDR: {e}"))?;
+    Ok(u64::from_be_bytes(buf))
+}
+
+fn read_scval(cur: &mut std::io::Cursor<&[u8]>) -> Result<ScVal, String> {
+    let disc = read_u32(cur)?;
+    match disc {
+        0 => Ok(ScVal::Void),
+        1 => Ok(ScVal::Bool(read_u32(cur)? != 0)),
+        3 => Ok(ScVal::I32(read_u32(cur)? as i32)),
+        4 => Ok(ScVal::U32(read_u32(cur)?)),
+        5 => Ok(ScVal::I64(read_u64(cur)? as i64)),
+        6 => Ok(ScVal::U64(read_u64(cur)?)),
+        10 => {
+            let len = read_u32(cur)? as usize;
+            let mut buf = vec![0u8; len];
+            use std::io::Read;
+            cur.read_exact(&mut buf)
+                .map_err(|e| format!("unexpected end of XDR: {e}"))?;
+            Ok(ScVal::Bytes(buf))
+        }
+        14 => {
+            let len = read_u32(cur)? as usize;
+            let mut buf = vec![0u8; len];
+            use std::io::Read;
+            cur.read_exact(&mut buf)
+                .map_err(|e| format!("unexpected end of XDR: {e}"))?;
+            Ok(ScVal::String(String::from_utf8_lossy(&buf).into_owned()))
+        }
+        15 => {
+            let len = read_u32(cur)? as usize;
+            let mut buf = vec![0u8; len];
+            use std::io::Read;
+            cur.read_exact(&mut buf)
+                .map_err(|e| format!("unexpected end of XDR: {e}"))?;
+            Ok(ScVal::Symbol(String::from_utf8_lossy(&buf).into_owned()))
+        }
+        16 => {
+            // ScVal::Address — the payload is a ScAddress union. We only
+            // need a printable form; the contract's read-only queries return
+            // account/contract addresses encoded as StrKey in the CLI's
+            // existing output, so we render the raw XDR bytes as hex here
+            // and let callers that need StrKey re-encode.
+            let addr_type = read_u32(cur)?;
+            match addr_type {
+                0 => {
+                    // SC_ADDRESS_TYPE_ACCOUNT: PublicKey union, Ed25519 = 0.
+                    let pk_type = read_u32(cur)?;
+                    if pk_type != 0 {
+                        return Err(format!("unsupported PublicKey type {pk_type}"));
+                    }
+                    let mut buf = [0u8; 32];
+                    use std::io::Read;
+                    cur.read_exact(&mut buf)
+                        .map_err(|e| format!("unexpected end of XDR: {e}"))?;
+                    Ok(ScVal::Address(hex_encode(&buf)))
+                }
+                1 => {
+                    // SC_ADDRESS_TYPE_CONTRACT: 32-byte hash.
+                    let mut buf = [0u8; 32];
+                    use std::io::Read;
+                    cur.read_exact(&mut buf)
+                        .map_err(|e| format!("unexpected end of XDR: {e}"))?;
+                    Ok(ScVal::Address(hex_encode(&buf)))
+                }
+                other => Err(format!("unsupported ScAddress type {other}")),
+            }
+        }
+        17 => {
+            // ScVal::Vec
+            let len = read_u32(cur)? as usize;
+            let mut items = Vec::with_capacity(len);
+            for _ in 0..len {
+                items.push(read_scval(cur)?);
+            }
+            Ok(ScVal::Vec(items))
+        }
+        18 => {
+            // ScVal::Map
+            let len = read_u32(cur)? as usize;
+            let mut entries = Vec::with_capacity(len);
+            for _ in 0..len {
+                let k = read_scval(cur)?;
+                let v = read_scval(cur)?;
+                entries.push((k, v));
+            }
+            Ok(ScVal::Map(entries))
+        }
+        other => Err(format!("unsupported ScVal discriminant {other}")),
+    }
+}
+
+fn hex_encode(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// Convert a decoded `ScVal::Map` into the CLI's `ContractResult` shape.
+fn scval_to_contract_result(val: &ScVal) -> Result<ContractResult, String> {
+    let map = match val {
+        ScVal::Map(m) => m,
+        other => {
+            return Err(format!(
+                "expected ScVal::Map at top level, got {other:?}"
+            ))
+        }
+    };
+    let mut result = ContractResult::default();
+    for (k, v) in map {
+        let key = match k {
+            ScVal::Symbol(s) | ScVal::String(s) => s.clone(),
+            other => return Err(format!("non-string map key: {other:?}")),
+        };
+        result.fields.insert(key, scval_to_json(v));
+    }
+    Ok(result)
+}
+
+/// Render a decoded `ScVal` as a `serde_json::Value` so it slots directly
+/// into the existing `render_json` output.
+fn scval_to_json(val: &ScVal) -> serde_json::Value {
+    use serde_json::Value;
+    match val {
+        ScVal::Void => Value::Null,
+        ScVal::Bool(b) => Value::Bool(*b),
+        ScVal::U32(n) => Value::from(*n),
+        ScVal::I32(n) => Value::from(*n),
+        ScVal::U64(n) => Value::from(*n),
+        ScVal::I64(n) => Value::from(*n),
+        ScVal::U128(n) => Value::from(n.to_string()),
+        ScVal::I128(n) => Value::from(n.to_string()),
+        ScVal::Symbol(s) | ScVal::String(s) => Value::from(s.clone()),
+        ScVal::Bytes(b) => Value::from(hex_encode(b)),
+        ScVal::Address(a) => Value::from(a.clone()),
+        ScVal::Vec(items) => Value::Array(items.iter().map(scval_to_json).collect()),
+        ScVal::Map(entries) => {
+            let mut obj = serde_json::Map::new();
+            for (k, v) in entries {
+                let key = match k {
+                    ScVal::Symbol(s) | ScVal::String(s) => s.clone(),
+                    other => format!("{other:?}"),
+                };
+                obj.insert(key, scval_to_json(v));
+            }
+            Value::Object(obj)
+        }
+    }
 }
 
 /// Native Soroban RPC client that talks directly to the Soroban JSON-RPC endpoint.

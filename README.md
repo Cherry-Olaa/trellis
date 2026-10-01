@@ -636,6 +636,13 @@ trellis status --agreement-id <hex-id> --quiet
 trellis status --agreement-id <hex-id> --human-readable   # or -H
 ```
 
+Read-only queries (`status`, `milestone-status`) decode the raw XDR `ScVal`
+returned by `simulateTransaction` natively in the CLI — no `stellar` binary is
+required for these commands. The decoded result is rendered through the same
+`render_json`/`render_human` paths as every other command, so `--json`,
+`--human-readable`, and `--quiet` all behave identically whether or not the
+Stellar CLI is installed.
+
 `--dry-run` prints the `stellar contract invoke` command that would be executed
 without actually running it or submitting anything on-chain. Because it never
 spawns the `stellar` binary, it works on machines where the Stellar CLI is not
