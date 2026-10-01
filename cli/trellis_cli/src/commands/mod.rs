@@ -5,6 +5,7 @@ use clap_complete::Shell;
 
 use crate::config::Config;
 use crate::rpc::{InvokeOutput, RpcClient};
+use crate::xdr_decode::{decode_agreement, decode_milestone};
 
 // ---------------------------------------------------------------------------
 // Native ScVal encoding (#<issue>)
@@ -454,6 +455,7 @@ pub fn dispatch(cmd: Commands, config: &Config, opts: &OutputOpts) -> Result<(),
         } => run_cancel_milestone(config, agreement_id, milestone_id, yes, opts),
 
         Commands::Status { agreement_id } => run_status(config, agreement_id, opts),
+
 
         Commands::MilestoneStatus {
             agreement_id,
