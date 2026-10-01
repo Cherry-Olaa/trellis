@@ -154,88 +154,169 @@ impl RpcClient {
         Self::build_cmd_args(config, fn_name, args).1
     }
 
-    /// Fetch the network passphrase reported by the configured RPC endpoint.
+    /// Send a signed transaction envelope via `sendTransaction` JSON-RPC,
+    /// then poll `getTransaction` on an interval until `SUCCESS`, `FAILED`, or timeout.
     ///
-    /// Issues a native `getNetwork` JSON-RPC request directly to
-    /// `config.rpc_url` (no `stellar` CLI dependency) and returns the
-    /// `passphrase` field from the response.
-    ///
-    /// The request is sent over a plain `TcpStream` using a minimal HTTP/1.1
-    /// POST so the CLI does not need an async runtime or an HTTP client
-    /// dependency. Only `http://` endpoints are supported here; `https://`
-    /// endpoints return an error so callers can fall back to the CLI path.
-    pub fn get_network_passphrase(config: &Config) -> Result<String, String> {
-        let url = config.rpc_url.trim();
-        let rest = url
-            .strip_prefix("http://")
-            .ok_or_else(|| format!("unsupported RPC URL scheme (expected http://): {url}"))?;
+    /// Reuses the CLI's existing retry/backoff conventions for the polling loop.
+    pub fn send_and_poll(config: &Config, envelope_xdr: &str, quiet: bool) -> InvokeOutput {
+        let max_retries: u32 = std::env::var("STELLAR_RPC_RETRIES")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(3);
 
-        let (host_port, path) = match rest.find('/') {
-            Some(idx) => (&rest[..idx], &rest[idx..]),
-            None => (rest, "/"),
+        const BACKOFF_MS: [u64; 4] = [1_000, 2_000, 4_000, 8_000];
+        let mut attempt = 0u32;
+
+        let client = reqwest::blocking::Client::new();
+        let rpc_url = &config.rpc_url;
+
+        // 1. Send transaction
+        let send_body = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "sendTransaction",
+            "params": {
+                "transaction": envelope_xdr
+            }
+        });
+
+        let send_res = loop {
+            apply_rate_limit();
+            match client.post(rpc_url).json(&send_body).send() {
+                Ok(resp) => match resp.json::<serde_json::Value>() {
+                    Ok(json) => {
+                        if let Some(err) = json.get("error") {
+                            let err_msg = err.get("message").and_then(|v| v.as_str()).unwrap_or("unknown RPC error");
+                            if attempt >= max_retries {
+                                return InvokeOutput {
+                                    stdout: String::new(),
+                                    stderr: format!("sendTransaction failed: {}", err_msg),
+                                    success: false,
+                                    command_debug: format!("sendTransaction({})", rpc_url),
+                                };
+                            }
+                        } else if let Some(result) = json.get("result") {
+                            let status = result.get("status").and_then(|v| v.as_str()).unwrap_or("");
+                            if status == "PENDING" || status == "SUCCESS" {
+                                if let Some(hash) = result.get("hash").and_then(|v| v.as_str()) {
+                                    break hash.to_string();
+                                }
+                            }
+                            if status == "ERROR" || status == "FAILED" {
+                                let error_result = result.get("errorResult").map(|v| v.to_string()).unwrap_or_else(|| "transaction failed".to_string());
+                                return InvokeOutput {
+                                    stdout: String::new(),
+                                    stderr: format!("Transaction failed: {}", error_result),
+                                    success: false,
+                                    command_debug: format!("sendTransaction({})", rpc_url),
+                                };
+                            }
+                            if let Some(hash) = result.get("hash").and_then(|v| v.as_str()) {
+                                break hash.to_string();
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        if attempt >= max_retries {
+                            return InvokeOutput {
+                                stdout: String::new(),
+                                stderr: format!("Failed to parse sendTransaction response: {}", e),
+                                success: false,
+                                command_debug: format!("sendTransaction({})", rpc_url),
+                            };
+                        }
+                    }
+                },
+                Err(e) => {
+                    if attempt >= max_retries {
+                        return InvokeOutput {
+                            stdout: String::new(),
+                            stderr: format!("sendTransaction network error: {}", e),
+                            success: false,
+                            command_debug: format!("sendTransaction({})", rpc_url),
+                        };
+                    }
+                }
+            }
+
+            let idx = (attempt as usize).min(BACKOFF_MS.len() - 1);
+            let base_ms = BACKOFF_MS[idx];
+            let jitter = (std::time::Instant::now().elapsed().subsec_nanos() % 200) as u64;
+            let sleep_duration = std::time::Duration::from_millis(base_ms + jitter);
+
+            if !quiet {
+                eprintln!("⚠️  sendTransaction transient error (attempt {}/{}), retrying in {}ms...", attempt + 1, max_retries, base_ms + jitter);
+            }
+
+            std::thread::sleep(sleep_duration);
+            attempt += 1;
         };
-        let (host, port) = match host_port.rsplit_once(':') {
-            Some((h, p)) => (
-                h,
-                p.parse::<u16>()
-                    .map_err(|_| format!("invalid port in RPC URL: {url}"))?,
-            ),
-            None => (host_port, 80u16),
-        };
 
-        let body = r#"{"jsonrpc":"2.0","id":1,"method":"getNetwork"}"#;
-        let request = format!(
-            "POST {path} HTTP/1.1\r\n\
-             Host: {host}\r\n\
-             Content-Type: application/json\r\n\
-             Content-Length: {len}\r\n\
-             Connection: close\r\n\
-             \r\n\
-             {body}",
-            len = body.len(),
-        );
+        // 2. Poll getTransaction until terminal status or timeout
+        let max_polls: u32 = std::env::var("STELLAR_RPC_POLL_RETRIES")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(30);
 
-        let mut stream = std::net::TcpStream::connect((host, port))
-            .map_err(|e| format!("failed to connect to RPC endpoint {host}:{port}: {e}"))?;
-        stream
-            .write_all(request.as_bytes())
-            .map_err(|e| format!("failed to send getNetwork request: {e}"))?;
+        let mut poll_attempt = 0u32;
+        loop {
+            apply_rate_limit();
+            let poll_body = serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "getTransaction",
+                "params": {
+                    "hash": send_res
+                }
+            });
 
-        let mut response = String::new();
-        std::io::Read::read_to_string(&mut stream, &mut response)
-            .map_err(|e| format!("failed to read getNetwork response: {e}"))?;
+            match client.post(rpc_url).json(&poll_body).send() {
+                Ok(resp) => match resp.json::<serde_json::Value>() {
+                    Ok(json) => {
+                        if let Some(result) = json.get("result") {
+                            let status = result.get("status").and_then(|v| v.as_str()).unwrap_or("");
+                            match status {
+                                "SUCCESS" => {
+                                    return InvokeOutput {
+                                        stdout: serde_json::to_string_pretty(&result).unwrap_or_default(),
+                                        stderr: String::new(),
+                                        success: true,
+                                        command_debug: format!("getTransaction({})", send_res),
+                                    };
+                                }
+                                "FAILED" | "ERROR" => {
+                                    let err_res = result.get("errorResult").map(|v| v.to_string()).unwrap_or_default();
+                                    return InvokeOutput {
+                                        stdout: String::new(),
+                                        stderr: format!("Transaction failed on-chain: status={}, errorResult={}", status, err_res),
+                                        success: false,
+                                        command_debug: format!("getTransaction({})", send_res),
+                                    };
+                                }
+                                _ => {
+                                    // PENDING or other non-terminal status
+                                }
+                            }
+                        }
+                    }
+                    Err(_) => {}
+                },
+                Err(_) => {}
+            }
 
-        let body_start = response
-            .find("\r\n\r\n")
-            .map(|i| i + 4)
-            .ok_or_else(|| "malformed HTTP response from RPC endpoint".to_string())?;
-        let json = &response[body_start..];
+            if poll_attempt >= max_polls {
+                return InvokeOutput {
+                    stdout: String::new(),
+                    stderr: format!("Transaction polling timed out after {} attempts (hash: {})", max_polls, send_res),
+                    success: false,
+                    command_debug: format!("getTransaction({})", send_res),
+                };
+            }
 
-        extract_json_string_field(json, "passphrase")
-            .ok_or_else(|| format!("RPC getNetwork response missing `passphrase`: {json}"))
-    }
-
-    /// Verify that `config.network_passphrase` matches the passphrase reported
-    /// by the configured RPC endpoint.
-    ///
-    /// Returns `Ok(())` when they match and a clear, specific error naming both
-    /// values when they do not. This is intended to be called early (e.g. from
-    /// `validate_environment`) so a misconfigured `--rpc-url` /
-    /// `--network-passphrase` pair fails fast instead of producing a confusing
-    /// downstream error.
-    pub fn verify_network_passphrase(config: &Config) -> Result<(), String> {
-        let actual = Self::get_network_passphrase(config)?;
-        if actual == config.network_passphrase {
-            Ok(())
-        } else {
-            Err(format!(
-                "network passphrase mismatch: configured '{}' but RPC endpoint {} reports '{}'",
-                config.network_passphrase, config.rpc_url, actual
-            ))
+            std::thread::sleep(std::time::Duration::from_secs(1));
+            poll_attempt += 1;
         }
     }
-
-    /// Invoke via stellar CLI with automatic retry on transient RPC failures.
     ///
     /// Backoff schedule (before jitter): 1 s, 2 s, 4 s, 8 s (capped).
     /// Jitter adds up to 200 ms derived from the current system clock so

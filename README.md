@@ -683,7 +683,7 @@ Supported shells: `bash`, `zsh`, `fish`, `elvish`, `powershell`.
 - Wallet connect — Freighter wallet integration with connection states
 - Event feed — real-time on-chain event history per agreement (limited to the last ~100k ledgers, ~6 days, that RPC providers retain; full history awaits an event-indexing service, #496)
 - Shell completions — bash, zsh, fish, elvish, powershell
-- Network passphrase verification — native `getNetwork` check against the configured RPC endpoint, with a clear mismatch error naming both values
+- Native strkey codec — `G...`/`S...`/`C...` Stellar address encode/decode with CRC16 checksum validation (`cli/trellis_cli/src/strkey.rs`)
 
 ### 🚧 Open for Contribution
 
