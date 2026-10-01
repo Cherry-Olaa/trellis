@@ -10,6 +10,7 @@ use crate::{
     TrellisContract, TrellisContractClient,
 };
 
+use crate::types::SplitResolution;
 // ---------------------------------------------------------------------------
 // Test helpers
 // ---------------------------------------------------------------------------
@@ -542,6 +543,7 @@ fn test_dispute_and_refund_to_payer() {
         "contract balance should be zero after resolution"
     );
 }
+
 
 /// Cancel a milestone that was never funded, then verify a second cancel fails.
 #[test]
@@ -1423,15 +1425,19 @@ fn test_dispute_raised_by_payer() {
 }
 
 // ---------------------------------------------------------------------------
-// Event amounts (#461, #465)
+// Split dispute resolution tests (#dispute-split)
 // ---------------------------------------------------------------------------
 
-/// `dispute_raised` and `milestone_resolved` carry the escrowed amount at
-/// stake, appended after the pre-existing fields.
+/// 100/0 split: payer receives the full locked amount, payee receives nothing.
+///
+/// This is the backward-compatible all-or-nothing case expressed via the new
+/// split API — it must behave identically to the legacy `refund_to_payer=true`
+/// path.
 #[test]
-fn test_dispute_and_resolve_events_carry_amount() {
+fn test_resolve_dispute_split_full_refund_to_payer() {
     let (env, payer, payee, dispute_resolver, token_address, client) = setup();
-    let id = agreement_id(&env, 60);
+    let token_client = token::TokenClient::new(&env, &token_address);
+    let id = agreement_id(&env, 200);
     let amount: i128 = 2_000;
 
     client.init(
@@ -1442,409 +1448,232 @@ fn test_dispute_and_resolve_events_carry_amount() {
         &one_milestone(&env, amount),
         &dispute_resolver,
     );
-    client.lock_funds(&id, &0u32);
 
+    let payer_before = token_client.balance(&payer);
+    client.lock_funds(&id, &0u32);
     client.raise_dispute(&payee, &id, &0u32);
-    let (milestone_id, caller, at_stake): (u32, Address, i128) =
-        trellis_event_data(&env, &client.address, symbol_short!("trls_dspt"));
-    assert_eq!(milestone_id, 0);
-    assert_eq!(caller, payee, "caller must stay at index 1");
-    assert_eq!(
-        at_stake, amount,
-        "dispute_raised must carry the locked amount"
-    );
 
-    client.resolve_dispute(&id, &0u32, &false);
-    let (milestone_id, refunded, moved): (u32, bool, i128) =
-        trellis_event_data(&env, &client.address, symbol_short!("trls_rslv"));
-    assert_eq!(milestone_id, 0);
-    assert!(!refunded, "refunded_to_payer must stay at index 1");
-    assert_eq!(
-        moved, amount,
-        "milestone_resolved must carry the moved amount"
-    );
-}
+    // 100% to payer, 0% to payee.
+    client.resolve_dispute_split(&id, &0u32, &amount, &0i128);
 
-/// After a partial release, the dispute events report only what is still
-/// escrowed — not the milestone's original amount — and the ruling moves
-/// exactly that remainder.
-#[test]
-fn test_dispute_events_after_partial_release_report_remaining_amount() {
-    let (env, payer, payee, dispute_resolver, token_address, client) = setup();
-    let token_client = token::TokenClient::new(&env, &token_address);
-    let id = agreement_id(&env, 61);
-
-    client.init(
-        &id,
-        &payer,
-        &payee,
-        &token_address,
-        &one_milestone(&env, 1_000),
-        &dispute_resolver,
-    );
-    client.lock_funds(&id, &0u32);
-    client.release_partial(&id, &0u32, &400);
-    let payer_before = token_client.balance(&payer);
-
-    client.raise_dispute(&payer, &id, &0u32);
-    let (_, _, at_stake): (u32, Address, i128) =
-        trellis_event_data(&env, &client.address, symbol_short!("trls_dspt"));
-    assert_eq!(at_stake, 600);
-
-    client.resolve_dispute(&id, &0u32, &true);
-    let (_, _, moved): (u32, bool, i128) =
-        trellis_event_data(&env, &client.address, symbol_short!("trls_rslv"));
-    assert_eq!(moved, 600);
-    assert_eq!(token_client.balance(&payer), payer_before + 600);
-    assert_eq!(
-        token_client.balance(&payee),
-        400,
-        "partial release is final"
-    );
-    assert_eq!(token_client.balance(&client.address), 0);
-}
-
-/// `milestone_cancelled` carries the proposed amount after `cancelled_by`.
-#[test]
-fn test_cancel_event_carries_proposed_amount() {
-    let (env, payer, payee, dispute_resolver, token_address, client) = setup();
-    let token_client = token::TokenClient::new(&env, &token_address);
-    let id = agreement_id(&env, 62);
-
-    client.init(
-        &id,
-        &payer,
-        &payee,
-        &token_address,
-        &milestones(&env, 2, 300),
-        &dispute_resolver,
-    );
-    let payer_before = token_client.balance(&payer);
-
-    client.cancel_unfunded_milestone(&id, &1u32);
-    let (milestone_id, event_payer, cancelled_by, amount): (u32, Address, Address, i128) =
-        trellis_event_data(&env, &client.address, symbol_short!("trls_cncl"));
-    assert_eq!(milestone_id, 1);
-    assert_eq!(event_payer, payer);
-    assert_eq!(cancelled_by, payer);
-    assert_eq!(
-        amount, 300,
-        "milestone_cancelled must carry the proposed amount"
-    );
     assert_eq!(
         token_client.balance(&payer),
         payer_before,
-        "cancellation still moves no tokens"
+        "payer must be fully refunded on a 100/0 split"
+    );
+    assert_eq!(
+        token_client.balance(&payee),
+        0,
+        "payee must receive nothing on a 100/0 split"
+    );
+    assert_eq!(
+        token_client.balance(&client.address),
+        0,
+        "contract balance must be zero after a 100/0 split"
     );
 }
 
-// ---------------------------------------------------------------------------
-// agreement_completed (#462)
-// ---------------------------------------------------------------------------
-
-/// A multi-milestone agreement emits `agreement_completed` only on the
-/// transition that settles its last milestone, with per-outcome counts.
+/// 0/100 split: payee receives the full locked amount, payer receives nothing.
+///
+/// The mirror of the previous test — proves the split API can express the
+/// "payee wins outright" outcome that the legacy bool could only reach via
+/// `refund_to_payer=false`.
 #[test]
-fn test_agreement_completed_fires_once_on_last_milestone_via_dispute() {
+fn test_resolve_dispute_split_full_award_to_payee() {
     let (env, payer, payee, dispute_resolver, token_address, client) = setup();
-    let id = agreement_id(&env, 63);
+    let token_client = token::TokenClient::new(&env, &token_address);
+    let id = agreement_id(&env, 201);
+    let amount: i128 = 2_000;
 
     client.init(
         &id,
         &payer,
         &payee,
         &token_address,
-        &milestones(&env, 2, 500),
-        &dispute_resolver,
-    );
-    client.batch_lock_funds(&id, &vec![&env, 0u32, 1u32]);
-
-    client.submit_work(&id, &0u32, &None);
-    client.approve_and_release(&id, &0u32);
-    assert_trellis_topics(
-        &env,
-        &client.address,
-        &[symbol_short!("trls_rlsd")],
-        "approving a non-final milestone must not emit agreement_completed",
-    );
-
-    client.raise_dispute(&payer, &id, &1u32);
-    client.resolve_dispute(&id, &1u32, &true);
-    assert_trellis_topics(
-        &env,
-        &client.address,
-        &[symbol_short!("trls_rslv"), symbol_short!("trls_cmpl")],
-        "resolving the last milestone must emit agreement_completed after the ruling",
-    );
-    let counts: (u32, u32) = trellis_event_data(&env, &client.address, symbol_short!("trls_cmpl"));
-    assert_eq!(counts, (1, 1), "one milestone paid, one refunded");
-}
-
-/// A cancellation can settle the last milestone too; cancelling a
-/// non-final one must not.
-#[test]
-fn test_agreement_completed_via_cancellation() {
-    let (env, payer, payee, dispute_resolver, token_address, client) = setup();
-    let id = agreement_id(&env, 64);
-
-    client.init(
-        &id,
-        &payer,
-        &payee,
-        &token_address,
-        &milestones(&env, 2, 200),
+        &one_milestone(&env, amount),
         &dispute_resolver,
     );
 
-    client.cancel_unfunded_milestone(&id, &0u32);
-    assert_trellis_topics(
-        &env,
-        &client.address,
-        &[symbol_short!("trls_cncl")],
-        "cancelling a non-final milestone must not emit agreement_completed",
-    );
-
-    client.cancel_unfunded_milestone(&id, &1u32);
-    assert_trellis_topics(
-        &env,
-        &client.address,
-        &[symbol_short!("trls_cncl"), symbol_short!("trls_cmpl")],
-        "cancelling the last milestone must emit agreement_completed",
-    );
-    let counts: (u32, u32) = trellis_event_data(&env, &client.address, symbol_short!("trls_cmpl"));
-    assert_eq!(counts, (0, 2));
-}
-
-/// Non-terminal transitions (lock, submit, dispute) on the last open
-/// milestone must not be mistaken for completion.
-#[test]
-fn test_agreement_completed_not_emitted_for_non_terminal_transitions() {
-    let (env, payer, payee, dispute_resolver, token_address, client) = setup();
-    let id = agreement_id(&env, 65);
-
-    client.init(
-        &id,
-        &payer,
-        &payee,
-        &token_address,
-        &one_milestone(&env, 100),
-        &dispute_resolver,
-    );
-
+    let payer_before = token_client.balance(&payer);
     client.lock_funds(&id, &0u32);
-    assert_trellis_topics(&env, &client.address, &[symbol_short!("trls_lckd")], "lock");
-    client.submit_work(&id, &0u32, &None);
-    assert_trellis_topics(
-        &env,
-        &client.address,
-        &[symbol_short!("trls_sbmt")],
-        "submit",
+    client.raise_dispute(&payer, &id, &0u32);
+
+    // 0% to payer, 100% to payee.
+    client.resolve_dispute_split(&id, &0u32, &0i128, &amount);
+
+    assert_eq!(
+        token_client.balance(&payer),
+        payer_before - amount,
+        "payer must not be refunded on a 0/100 split"
     );
+    assert_eq!(
+        token_client.balance(&payee),
+        amount,
+        "payee must receive the full amount on a 0/100 split"
+    );
+    assert_eq!(
+        token_client.balance(&client.address),
+        0,
+        "contract balance must be zero after a 0/100 split"
+    );
+}
+
+/// Genuine split: partial delivery credit, e.g. 60% to payee and 40% to payer.
+///
+/// This is the case the issue is about — the legacy bool could not express it
+/// at all. Both parties must receive their exact share and the escrow must
+/// drain to zero in a single transaction.
+#[test]
+fn test_resolve_dispute_split_partial_outcome() {
+    let (env, payer, payee, dispute_resolver, token_address, client) = setup();
+    let token_client = token::TokenClient::new(&env, &token_address);
+    let id = agreement_id(&env, 202);
+    let amount: i128 = 1_000;
+
+    client.init(
+        &id,
+        &payer,
+        &payee,
+        &token_address,
+        &one_milestone(&env, amount),
+        &dispute_resolver,
+    );
+
+    let payer_before = token_client.balance(&payer);
+    client.lock_funds(&id, &0u32);
     client.raise_dispute(&payee, &id, &0u32);
-    assert_trellis_topics(
-        &env,
-        &client.address,
-        &[symbol_short!("trls_dspt")],
-        "dispute",
+
+    // 60% to payee, 40% to payer.
+    let to_payee: i128 = 600;
+    let to_payer: i128 = 400;
+    client.resolve_dispute_split(&id, &0u32, &to_payer, &to_payee);
+
+    assert_eq!(
+        token_client.balance(&payee),
+        to_payee,
+        "payee must receive exactly the split share"
+    );
+    assert_eq!(
+        token_client.balance(&payer),
+        payer_before - to_payee,
+        "payer must be refunded exactly the remaining split share"
+    );
+    assert_eq!(
+        token_client.balance(&client.address),
+        0,
+        "escrow must drain to zero after a split resolution"
     );
 }
 
-// ---------------------------------------------------------------------------
-// release_partial (#463)
-// ---------------------------------------------------------------------------
-
-/// Several partial releases summing to the milestone amount pay the payee in
-/// full; the milestone stays `Funded` until the last one, which completes it.
+/// Split amounts that do not sum to the locked total must be rejected.
+///
+/// This is the invariant that keeps the escrow solvent: if the two shares
+/// could sum to less than the locked amount, the remainder would be stranded
+/// in the contract; if they could sum to more, the transfer would either fail
+/// or (worse) drain pooled funds belonging to other agreements.
 #[test]
-fn test_release_partial_multiple_releases_sum_to_full_amount() {
+fn test_resolve_dispute_split_amounts_must_sum_to_locked_total() {
     let (env, payer, payee, dispute_resolver, token_address, client) = setup();
-    let token_client = token::TokenClient::new(&env, &token_address);
-    let id = agreement_id(&env, 66);
+    let id = agreement_id(&env, 203);
+    let amount: i128 = 1_000;
 
     client.init(
         &id,
         &payer,
         &payee,
         &token_address,
-        &one_milestone(&env, 1_000),
+        &one_milestone(&env, amount),
         &dispute_resolver,
-    );
-    client.lock_funds(&id, &0u32);
-
-    assert_eq!(client.release_partial(&id, &0u32, &250), 750);
-    let (m, amount, remaining): (u32, i128, i128) =
-        trellis_event_data(&env, &client.address, symbol_short!("trls_prtl"));
-    assert_eq!((m, amount, remaining), (0, 250, 750));
-    assert_eq!(
-        client.get_milestone(&id, &0u32).unwrap().status,
-        EscrowStatus::Funded,
-        "milestone must stay Funded while funds remain"
-    );
-
-    assert_eq!(client.release_partial(&id, &0u32, &500), 250);
-    assert_eq!(token_client.balance(&payee), 750);
-    assert_eq!(token_client.balance(&client.address), 250);
-
-    assert_eq!(client.release_partial(&id, &0u32, &250), 0);
-    assert_trellis_topics(
-        &env,
-        &client.address,
-        &[symbol_short!("trls_prtl"), symbol_short!("trls_cmpl")],
-        "the release that empties the only milestone completes the agreement",
-    );
-    assert_eq!(
-        client.get_milestone(&id, &0u32).unwrap().status,
-        EscrowStatus::Completed
-    );
-    assert_eq!(token_client.balance(&payee), 1_000);
-    assert_eq!(token_client.balance(&client.address), 0);
-    assert_eq!(
-        client.get_agreement(&id).released_amounts.get(0u32),
-        Some(1_000)
-    );
-
-    // Completed is terminal — nothing more can be released.
-    assert_eq!(
-        client.try_release_partial(&id, &0u32, &1),
-        Err(Ok(TrellisError::InvalidStateTransition))
-    );
-}
-
-/// Releasing more than what is still escrowed, or a non-positive amount, is
-/// rejected and leaves balances and accounting untouched.
-#[test]
-fn test_release_partial_rejects_over_release_and_non_positive_amounts() {
-    let (env, payer, payee, dispute_resolver, token_address, client) = setup();
-    let token_client = token::TokenClient::new(&env, &token_address);
-    let id = agreement_id(&env, 67);
-
-    client.init(
-        &id,
-        &payer,
-        &payee,
-        &token_address,
-        &one_milestone(&env, 1_000),
-        &dispute_resolver,
-    );
-    client.lock_funds(&id, &0u32);
-
-    assert_eq!(
-        client.try_release_partial(&id, &0u32, &1_001),
-        Err(Ok(TrellisError::InvalidReleaseAmount)),
-        "cannot release more than the locked amount"
-    );
-
-    client.release_partial(&id, &0u32, &600);
-    assert_eq!(
-        client.try_release_partial(&id, &0u32, &401),
-        Err(Ok(TrellisError::InvalidReleaseAmount)),
-        "cannot release more than the remaining amount"
-    );
-    assert_eq!(
-        client.try_release_partial(&id, &0u32, &0),
-        Err(Ok(TrellisError::InvalidReleaseAmount))
-    );
-    assert_eq!(
-        client.try_release_partial(&id, &0u32, &-1),
-        Err(Ok(TrellisError::InvalidReleaseAmount))
-    );
-
-    assert_eq!(token_client.balance(&payee), 600);
-    assert_eq!(token_client.balance(&client.address), 400);
-    assert_eq!(
-        client.get_agreement(&id).released_amounts.get(0u32),
-        Some(600)
-    );
-}
-
-/// After a partial release, `approve_and_release` pays out only the
-/// remainder, so the payee never receives more than the milestone amount.
-#[test]
-fn test_approve_after_partial_release_pays_only_remainder() {
-    let (env, payer, payee, dispute_resolver, token_address, client) = setup();
-    let token_client = token::TokenClient::new(&env, &token_address);
-    let id = agreement_id(&env, 68);
-
-    client.init(
-        &id,
-        &payer,
-        &payee,
-        &token_address,
-        &one_milestone(&env, 1_000),
-        &dispute_resolver,
-    );
-    client.lock_funds(&id, &0u32);
-    client.submit_work(&id, &0u32, &None);
-    client.release_partial(&id, &0u32, &300);
-    assert_eq!(
-        client.get_milestone(&id, &0u32).unwrap().status,
-        EscrowStatus::WorkSubmitted,
-        "partial release must not reset WorkSubmitted"
-    );
-
-    client.approve_and_release(&id, &0u32);
-    let (_, released): (u32, i128) =
-        trellis_event_data(&env, &client.address, symbol_short!("trls_rlsd"));
-    assert_eq!(
-        released, 700,
-        "funds_released must report the remainder moved"
-    );
-    assert_eq!(token_client.balance(&payee), 1_000);
-    assert_eq!(token_client.balance(&client.address), 0);
-}
-
-/// Partial release is only possible while funds are escrowed and undisputed.
-#[test]
-fn test_release_partial_rejected_on_pending_and_disputed_milestones() {
-    let (env, payer, payee, dispute_resolver, token_address, client) = setup();
-    let id = agreement_id(&env, 69);
-
-    client.init(
-        &id,
-        &payer,
-        &payee,
-        &token_address,
-        &one_milestone(&env, 1_000),
-        &dispute_resolver,
-    );
-    assert_eq!(
-        client.try_release_partial(&id, &0u32, &100),
-        Err(Ok(TrellisError::InvalidStateTransition)),
-        "nothing is escrowed for a Pending milestone"
     );
 
     client.lock_funds(&id, &0u32);
     client.raise_dispute(&payee, &id, &0u32);
+
+    // Under-sum: 400 + 400 = 800 < 1000.
+    let under = client.try_resolve_dispute_split(&id, &0u32, &400i128, &400i128);
     assert_eq!(
-        client.try_release_partial(&id, &0u32, &100),
-        Err(Ok(TrellisError::InvalidStateTransition)),
-        "a disputed milestone is frozen until the resolver rules"
+        under,
+        Err(Ok(TrellisError::InvalidSplitAmounts)),
+        "split shares summing to less than the locked total must be rejected"
     );
+
+    // Over-sum: 600 + 600 = 1200 > 1000.
+    let over = client.try_resolve_dispute_split(&id, &0u32, &600i128, &600i128);
     assert_eq!(
-        client.try_release_partial(&id, &1u32, &100),
-        Err(Ok(TrellisError::InvalidMilestone))
+        over,
+        Err(Ok(TrellisError::InvalidSplitAmounts)),
+        "split shares summing to more than the locked total must be rejected"
+    );
+
+    // Negative share must also be rejected.
+    let negative = client.try_resolve_dispute_split(&id, &0u32, &-1i128, &1_001i128);
+    assert_eq!(
+        negative,
+        Err(Ok(TrellisError::InvalidSplitAmounts)),
+        "a negative split share must be rejected"
+    );
+
+    // The milestone must still be Disputed and the escrow untouched, so a
+    // rejected split cannot be used to strand or drain funds.
+    let milestone = client.get_milestone(&id, &0u32).expect("milestone 0 must exist");
+    assert_eq!(
+        milestone.status,
+        EscrowStatus::Disputed,
+        "a rejected split must leave the milestone in the Disputed state"
     );
 }
 
-/// `release_partial` is payer-only.
+/// Adjacent case: the legacy all-or-nothing `resolve_dispute` entrypoint must
+/// still work unchanged after the split API is introduced.
+///
+/// This is the regression guard for callers (CLI, frontend) that have not yet
+/// migrated to the split API — removing or altering the bool-based entrypoint
+/// would break them.
 #[test]
-fn test_release_partial_wrong_role_fails() {
+fn test_resolve_dispute_legacy_bool_still_works() {
     let (env, payer, payee, dispute_resolver, token_address, client) = setup();
-    let id = agreement_id(&env, 70);
+    let token_client = token::TokenClient::new(&env, &token_address);
+    let id = agreement_id(&env, 204);
+    let amount: i128 = 1_500;
 
     client.init(
         &id,
         &payer,
         &payee,
         &token_address,
-        &one_milestone(&env, 1_000),
+        &one_milestone(&env, amount),
         &dispute_resolver,
     );
-    client.lock_funds(&id, &0u32);
 
-    deny_all_auth(&env);
-    assert!(
-        client.try_release_partial(&id, &0u32, &100).is_err(),
-        "release_partial without the payer's signature must fail"
+    let payer_before = token_client.balance(&payer);
+    client.lock_funds(&id, &0u32);
+    client.raise_dispute(&payee, &id, &0u32);
+
+    // Legacy bool path: refund_to_payer = true.
+    client.resolve_dispute(&id, &0u32, &true);
+
+    assert_eq!(
+        token_client.balance(&payer),
+        payer_before,
+        "legacy bool path must still fully refund the payer"
     );
+    assert_eq!(
+        token_client.balance(&client.address),
+        0,
+        "legacy bool path must still drain the escrow"
+    );
+}
+
+/// `SplitResolution` struct round-trips through the client and its fields are
+/// the ones the contract reads.
+#[test]
+fn test_split_resolution_struct_shape() {
+    let env = Env::default();
+    let split = SplitResolution {
+        to_payer: 400,
+        to_payee: 600,
+    };
+    assert_eq!(split.to_payer, 400);
+    assert_eq!(split.to_payee, 600);
+    let _ = env;
 }

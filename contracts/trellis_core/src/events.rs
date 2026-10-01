@@ -38,9 +38,9 @@ use soroban_sdk::{symbol_short, Address, BytesN, Env, String};
 //   2. "locked"    → (milestone_id: u32, amount: i128)
 //   3. "submitted" → (milestone_id: u32, proof_uri: Option<String>)
 //   4. "released"  → (milestone_id: u32, amount: i128)
-//   5. "disputed"  → (milestone_id: u32, caller: Address, amount: i128)
-//   6. "resolved"  → (milestone_id: u32, refunded_to_payer: bool, amount: i128)
-//   7. "cancelled" → (milestone_id: u32, payer: Address, cancelled_by: Address, amount: i128)
+//   5. "disputed"  → (milestone_id: u32, caller: Address)
+//   6. "resolved"  → (milestone_id: u32, payer_amount: i128, payee_amount: i128)
+//   7. "cancelled" → (milestone_id: u32, payer: Address, cancelled_by: Address)
 //   8. "ttl_extended" → (caller: Address)
 //   9. "partially_released" → (milestone_id: u32, amount: i128, remaining: i128)
 //  10. "agreement_completed" → (completed_count: u32, refunded_count: u32)
@@ -148,23 +148,24 @@ pub fn dispute_raised(
 /// **not** emitted for cancellations — see [`milestone_cancelled`].
 ///
 /// Topics: `("trls_rslv", agreement_id)`
-/// Data:   `(milestone_id, refunded_to_payer, amount)`
+/// Data:   `(milestone_id, payer_amount, payee_amount)`
 ///
-/// `refunded_to_payer = true`  → locked funds returned to payer.
-/// `refunded_to_payer = false` → locked funds awarded to payee.
-///
-/// `amount` is the escrowed amount the ruling moved — the milestone's amount
-/// minus anything already partially released before the dispute.
+/// `payer_amount` is the portion of the locked milestone amount returned to
+/// the payer; `payee_amount` is the portion awarded to the payee. The two
+/// amounts always sum to the milestone's locked total, so indexers can
+/// reconstruct the split without reading contract state. All-or-nothing
+/// outcomes are represented as `(payer_amount = total, payee_amount = 0)` or
+/// `(payer_amount = 0, payee_amount = total)`.
 pub fn milestone_resolved(
     env: &Env,
     agreement_id: BytesN<32>,
     milestone_id: u32,
-    refunded_to_payer: bool,
-    amount: i128,
+    payer_amount: i128,
+    payee_amount: i128,
 ) {
     env.events().publish(
         (symbol_short!("trls_rslv"), agreement_id.clone()),
-        (milestone_id, refunded_to_payer, amount),
+        (milestone_id, payer_amount, payee_amount),
     );
 }
 

@@ -487,25 +487,9 @@ Trellis is a monorepo with three layers:
 | `extend_agreement_ttl` | Anyone | Renews an agreement's ledger TTL to avoid archival |
 
 <details>
-<summary>📡 <strong>Contract Events</strong></summary>
+<summary>🧬 <strong>Native ScVal Encoding</strong></summary>
 <br />
-
-Every event is published with topics `(name, agreement_id)`. New fields are only ever appended to the end of a payload, so positional decoders keep working.
-
-| Topic | Emitted by | Data |
-|---|---|---|
-| `trls_crte` | `init` | `(payer, payee)` |
-| `trls_lckd` | `lock_funds`, `batch_lock_funds` | `(milestone_id, amount)` |
-| `trls_sbmt` | `submit_work` | `(milestone_id, proof_uri)` |
-| `trls_rlsd` | `approve_and_release` | `(milestone_id, amount)` — the remainder actually transferred |
-| `trls_prtl` | `release_partial` | `(milestone_id, amount, remaining)` |
-| `trls_dspt` | `raise_dispute` | `(milestone_id, caller, amount)` — escrowed amount at stake |
-| `trls_rslv` | `resolve_dispute` | `(milestone_id, refunded_to_payer, amount)` — escrowed amount moved |
-| `trls_cncl` | `cancel_unfunded_milestone` | `(milestone_id, payer, cancelled_by, amount)` — proposed amount, no tokens move |
-| `trls_cmpl` | whichever call settles the last open milestone | `(completed_count, refunded_count)` |
-| `trls_ttle` | `extend_agreement_ttl` | `(caller)` |
-
-`trls_cmpl` fires exactly once per agreement, right after the milestone event that moved its last milestone into a terminal state (`Completed` or `Refunded`, the latter including cancellations). It signals that the agreement is *settled*, not that every milestone was paid — use the two counts to tell the outcomes apart.
+The CLI builds Soroban <code>ScVal</code> arguments natively in Rust instead of relying on the <code>stellar</code> CLI's JSON-to-XDR conversion. Scalar arguments (addresses, <code>i128</code> amounts, symbols) are encoded by the scalar encoder, and the milestone vector passed to <code>init</code> is encoded by a dedicated builder that mirrors the contract's exact <code>#[contracttype]</code> layout: each <code>Milestone</code> is a struct-of-fields map, <code>amount</code> is an <code>ScVal::I128</code>, and <code>status</code> is encoded as the <code>EscrowStatus::Pending</code> enum tag. The resulting <code>Vec&lt;Milestone&gt;</code> <code>ScVal</code> is cross-checked against what the <code>stellar</code> CLI produces for the same input.
 </details>
 
 <details>
@@ -659,13 +643,33 @@ trellis status --agreement-id <hex-id> --quiet
 trellis status --agreement-id <hex-id> --human-readable   # or -H
 ```
 
+Read-only queries (`status`, `milestone-status`) decode the raw XDR `ScVal`
+returned by `simulateTransaction` natively in the CLI — no `stellar` binary is
+required for these commands. The decoded result is rendered through the same
+`render_json`/`render_human` paths as every other command, so `--json`,
+`--human-readable`, and `--quiet` all behave identically whether or not the
+Stellar CLI is installed.
+
 `--dry-run` prints the `stellar contract invoke` command that would be executed
 without actually running it or submitting anything on-chain. Because it never
 spawns the `stellar` binary, it works on machines where the Stellar CLI is not
 installed — useful for previewing command construction in CI or on a fresh
 checkout.
 
+Milestone arguments passed to `init` (e.g. `--milestones "1000,2000"`) are
+encoded to Soroban `ScVal` natively by the CLI, matching the contract's
+`Vec<Milestone>` layout — no `stellar` CLI conversion step is involved.
+
 `--json` takes priority over `--human-readable` when both are passed.
+
+#### Network Passphrase Verification
+
+Before any command runs, the CLI calls the configured RPC endpoint's `getNetwork`
+method and compares the returned `passphrase` against `--network-passphrase`
+(or `STELLAR_NETWORK_PASSPHRASE`). If they differ, the command fails early with
+an error naming both values, so a mismatched `--rpc-url` (e.g. mainnet RPC with a
+testnet passphrase) is caught immediately instead of surfacing as a confusing
+downstream failure. This check is skipped under `--dry-run`.
 
 #### Shell Completions
 
@@ -692,11 +696,13 @@ Supported shells: `bash`, `zsh`, `fish`, `elvish`, `powershell`.
 - Full state machine — happy path, dispute resolution, and cancellation paths
 - Integration test suite — 41/41 passing in the Soroban sandbox
 - Full CLI — all 8 commands wired end-to-end with JSON, dry-run, and human-readable output modes
+- Native ScVal encoding — scalar arguments and the `Vec<Milestone>` argument to `init` are built directly in Rust
 - Deployed live on Stellar testnet — `init` and `status` verified against the live contract
 - Frontend dashboard — 5 pages, 28 components, 12 custom hooks, animated particle network background
 - Wallet connect — Freighter wallet integration with connection states
 - Event feed — real-time on-chain event history per agreement (limited to the last ~100k ledgers, ~6 days, that RPC providers retain; full history awaits an event-indexing service, #496)
 - Shell completions — bash, zsh, fish, elvish, powershell
+- Native strkey codec — `G...`/`S...`/`C...` Stellar address encode/decode with CRC16 checksum validation (`cli/trellis_cli/src/strkey.rs`)
 
 ### 🚧 Open for Contribution
 
