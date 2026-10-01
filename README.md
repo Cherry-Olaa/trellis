@@ -651,6 +651,15 @@ checkout.
 
 `--json` takes priority over `--human-readable` when both are passed.
 
+#### Network Passphrase Verification
+
+Before any command runs, the CLI calls the configured RPC endpoint's `getNetwork`
+method and compares the returned `passphrase` against `--network-passphrase`
+(or `STELLAR_NETWORK_PASSPHRASE`). If they differ, the command fails early with
+an error naming both values, so a mismatched `--rpc-url` (e.g. mainnet RPC with a
+testnet passphrase) is caught immediately instead of surfacing as a confusing
+downstream failure. This check is skipped under `--dry-run`.
+
 #### Shell Completions
 
 ```bash
@@ -681,6 +690,7 @@ Supported shells: `bash`, `zsh`, `fish`, `elvish`, `powershell`.
 - Wallet connect — Freighter wallet integration with connection states
 - Event feed — real-time on-chain event history per agreement (limited to the last ~100k ledgers, ~6 days, that RPC providers retain; full history awaits an event-indexing service, #496)
 - Shell completions — bash, zsh, fish, elvish, powershell
+- Native strkey codec — `G...`/`S...`/`C...` Stellar address encode/decode with CRC16 checksum validation (`cli/trellis_cli/src/strkey.rs`)
 
 ### 🚧 Open for Contribution
 
