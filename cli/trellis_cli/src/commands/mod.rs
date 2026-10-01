@@ -8,6 +8,95 @@ use crate::rpc::{InvokeOutput, RpcClient};
 use crate::xdr_decode::{decode_agreement, decode_milestone};
 
 // ---------------------------------------------------------------------------
+// Native ScVal encoding (#<issue>)
+// ---------------------------------------------------------------------------
+// Converts the CLI's typed scalar arguments into Soroban XDR `ScVal` values
+// instead of formatting strings for the `stellar` CLI to parse itself.
+
+/// Encodes a hex-encoded 32-byte agreement ID as `ScVal::Bytes`.
+///
+/// Accepts exactly 64 hex characters (32 bytes). Returns an error for any
+/// other length or for non-hex input.
+pub fn encode_bytes_n32(hex_str: &str) -> Result<stellar_xdr::ScVal, String> {
+    let hex_str = hex_str.trim();
+    if hex_str.len() != 64 {
+        return Err(format!(
+            "agreement_id must be 64 hex characters (32 bytes), got {}",
+            hex_str.len()
+        ));
+    }
+
+    let mut bytes = [0u8; 32];
+    for (i, chunk) in hex_str.as_bytes().chunks(2).enumerate() {
+        let hi = hex_nibble(chunk[0])?;
+        let lo = hex_nibble(chunk[1])?;
+        bytes[i] = (hi << 4) | lo;
+    }
+
+    Ok(stellar_xdr::ScVal::Bytes(stellar_xdr::ScBytes(
+        bytes.to_vec(),
+    )))
+}
+
+/// Decodes a single ASCII hex character into its 4-bit value.
+fn hex_nibble(c: u8) -> Result<u8, String> {
+    match c {
+        b'0'..=b'9' => Ok(c - b'0'),
+        b'a'..=b'f' => Ok(c - b'a' + 10),
+        b'A'..=b'F' => Ok(c - b'A' + 10),
+        _ => Err(format!("invalid hex character: {}", c as char)),
+    }
+}
+
+/// Encodes a Stellar strkey address (G.../C...) as `ScVal::Address`.
+///
+/// Relies on the strkey codec to validate and decode the address.
+pub fn encode_address(addr: &str) -> Result<stellar_xdr::ScVal, String> {
+    use stellar_strkey::Strkey;
+
+    let strkey = Strkey::from_string(addr.trim())
+        .map_err(|e| format!("invalid Stellar address {addr:?}: {e}"))?;
+
+    let sc_address = match strkey {
+        Strkey::PublicKeyEd25519(pk) => stellar_xdr::ScAddress::Account(
+            stellar_xdr::AccountId(stellar_xdr::PublicKey::PublicKeyTypeEd25519(
+                stellar_xdr::Uint256(pk.0),
+            )),
+        ),
+        Strkey::Contract(c) => stellar_xdr::ScAddress::Contract(stellar_xdr::ContractId(
+            stellar_xdr::Hash(c.0),
+        )),
+        other => {
+            return Err(format!("unsupported address type: {other:?}"));
+        }
+    };
+
+    Ok(stellar_xdr::ScVal::Address(sc_address))
+}
+
+/// Encodes a `u32` milestone index as `ScVal::U32`.
+pub fn encode_u32(value: u32) -> stellar_xdr::ScVal {
+    stellar_xdr::ScVal::U32(value)
+}
+
+/// Encodes a boolean as `ScVal::Bool`.
+pub fn encode_bool(value: bool) -> stellar_xdr::ScVal {
+    stellar_xdr::ScVal::Bool(value)
+}
+
+/// Encodes an optional string as `ScVal::String` or `ScVal::Void`.
+///
+/// `None` maps to `ScVal::Void`; `Some("")` maps to an empty `ScVal::String`.
+pub fn encode_optional_string(value: Option<&str>) -> stellar_xdr::ScVal {
+    match value {
+        Some(s) => stellar_xdr::ScVal::String(stellar_xdr::ScString(
+            s.as_bytes().to_vec(),
+        )),
+        None => stellar_xdr::ScVal::Void,
+    }
+}
+
+// ---------------------------------------------------------------------------
 // ANSI escape codes (#245)
 // ---------------------------------------------------------------------------
 // Hoisted to module level so they are compiled once instead of being
