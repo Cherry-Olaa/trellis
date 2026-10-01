@@ -1,4 +1,4 @@
-use soroban_sdk::{contracttype, Address, BytesN, String, Vec};
+use soroban_sdk::{contracttype, Address, BytesN, Map, String, Vec};
 
 // ---------------------------------------------------------------------------
 // EscrowStatus — lifecycle state machine for an escrow agreement / milestone
@@ -57,6 +57,30 @@ pub struct Milestone {
     /// representation of "no proof" — an empty `Some("")` is not a sentinel
     /// and callers should not construct one.
     pub proof_uri: Option<String>,
+    /// Optional split of this milestone's locked amount between payer and
+    /// payee, set when a dispute is resolved with a partial outcome.
+    ///
+    /// `None` means no split has been recorded (all-or-nothing resolution or
+    /// no dispute). When `Some`, `payer_amount + payee_amount` must equal
+    /// `amount` exactly.
+    pub split: Option<MilestoneSplit>,
+}
+
+// ---------------------------------------------------------------------------
+// Agreement — top-level escrow record stored on-chain
+//
+// See the note on [`Milestone`] for why `Eq`/`PartialEq` are derived: it lets a
+// whole agreement read back from `get_agreement` be asserted with one
+// `assert_eq!`, so no field can be added here without every existing equality
+// assertion noticing.
+// ---------------------------------------------------------------------------
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MilestoneSplit {
+    /// Portion of the milestone amount awarded back to the payer.
+    pub payer_amount: i128,
+    /// Portion of the milestone amount awarded to the payee.
+    pub payee_amount: i128,
 }
 
 // ---------------------------------------------------------------------------
@@ -98,4 +122,18 @@ pub struct Agreement {
     /// there is no entrypoint that adds, removes, or resizes milestones after
     /// `init`, so it never needs recomputation.
     pub total_amount: i128,
+    /// Cumulative amount already paid out to the payee per milestone via
+    /// partial releases, keyed by milestone index.
+    ///
+    /// Empty at `init`; only `release_partial` inserts entries. A milestone
+    /// with no entry has released nothing. The amount still held in escrow
+    /// for a milestone is always `milestone.amount - released_amounts[id]`,
+    /// and every later payout (`approve_and_release`, `resolve_dispute`)
+    /// moves only that remainder, so the sum paid out for a milestone can
+    /// never exceed what was locked for it.
+    ///
+    /// Stored inside the agreement record rather than under its own ledger
+    /// key so it shares the agreement's TTL: a separately-archived counter
+    /// would silently read back as zero and allow a double payout.
+    pub released_amounts: Map<u32, i128>,
 }

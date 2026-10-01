@@ -1,10 +1,10 @@
-use soroban_sdk::contracterror;
+use soroban_contracterror;
 
 /// Canonical error type for the Trellis Protocol contract.
 ///
 /// `#[contracterror]` serialises each variant's `u32` discriminant into the
-/// XDR `ScError` envelope returned to the invoker, making error codes part of
-/// the public on-chain ABI.
+/// XDR `ScError` envelope returned to the invoker, making error codes part of the
+/// public on-chain ABI.
 ///
 /// # Stability rule
 /// Discriminant values are **permanent** from the first mainnet deployment
@@ -15,7 +15,7 @@ use soroban_sdk::contracterror;
 /// was renumbered from `7` to `6` to close the gap. `NoFundsToRefund` (then
 /// discriminant `6`) was itself later removed for the same reason: no
 /// codepath ever returned it. Discriminant `6` is left vacant rather than
-/// reused, per the append-only rule above. SDK consumers pinned to the old
+/// reused, per the append-only rule above. SDT consumers pinned to the old
 /// numbering must regenerate their bindings.
 ///
 /// # Exhaustiveness
@@ -56,11 +56,10 @@ pub enum TrellisError {
     InvalidStateTransition = 5,
 
     // Discriminant 6 vacant — formerly `NoFundsToRefund`, removed as
-    // dead code: no codepath ever returned it. `cancel_unfunded_milestone`
-    // only ever runs while a milestone still holds no funds, so calling it
-    // on a milestone that has left `Pending` is a state machine violation
-    // ([`TrellisError::InvalidStateTransition`]), not a distinct economic
-    // one. Left vacant rather than reused, per the append-only rule above.
+// dead code: no codepath ever returned it. `cancel_unfunded_milestone`// only ever runs while a milestone still holds no funds, so calling it
+// on a milestone that has left `Pending` is a state machine violation
+// ([`TrellisError::InvalidStateTransition`]), not a distinct economic
+// one. Left vacant rather than reused, per the append-only rule above.
     /// `init` was called with an empty `milestones` vector. An agreement with
     /// no milestones can never transition through any state, permanently
     /// wasting the storage it occupies.
@@ -102,11 +101,10 @@ pub enum TrellisError {
     /// pre-advance a milestone".
     InvalidInitialMilestoneStatus = 11,
 
-    /// `submit_work` was called with a `proof_uri` longer than the contract's
-    /// `MAX_PROOF_URI_LEN` (512 bytes). Proof URIs are stored verbatim in the
-    /// agreement's persistent entry, so an unbounded length would let a payee
-    /// permanently inflate the agreement's storage footprint and rent.
-    ///
-    /// Appended as discriminant `12` per the stability rule above.
-    ProofUriTooLong = 12,
+    /// The payer/payee split supplied to `resolve_dispute` does not sum
+    /// to the milestone's locked amount. A split resolution must account
+    /// for every unit of escrowed funds exactly once; any other total either
+    /// leaves funds stranded in the contract or attempts to pay out more
+    /// than was locked.
+    InvalidSplitAmount = 12,
 }

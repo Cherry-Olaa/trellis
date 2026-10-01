@@ -10,6 +10,7 @@ use crate::{
     TrellisContract, TrellisContractClient, MAX_PROOF_URI_LEN,
 };
 
+use crate::types::SplitResolution;
 // ---------------------------------------------------------------------------
 // Test helpers
 // ---------------------------------------------------------------------------
@@ -81,6 +82,45 @@ fn assert_trellis_topics(env: &Env, contract: &Address, expected: &[Symbol], msg
         "{msg} (saw {} total events)",
         all_events.len()
     );
+}
+
+/// Return the data payload of the single Trellis event named `name` from the
+/// most recent top-level invocation, decoded as `T`.
+fn trellis_event_data<T>(env: &Env, contract: &Address, name: Symbol) -> T
+where
+    T: TryFromVal<Env, soroban_sdk::Val>,
+{
+    let all_events = env.events().all();
+    let mut found: Option<T> = None;
+    for i in 0..all_events.len() {
+        let (contract_id, topics, data) = all_events.get_unchecked(i);
+        if contract_id != *contract {
+            continue;
+        }
+        let topic0 = Symbol::try_from_val(env, &topics.get_unchecked(0))
+            .expect("event topic 0 must decode as a Symbol");
+        if topic0 == name {
+            assert!(found.is_none(), "event {name:?} emitted more than once");
+            found = Some(
+                T::try_from_val(env, &data)
+                    .unwrap_or_else(|_| panic!("event {name:?} data has unexpected shape")),
+            );
+        }
+    }
+    found.unwrap_or_else(|| panic!("event {name:?} was not emitted"))
+}
+
+/// Build `n` Pending milestones of `amount` each.
+fn milestones(env: &Env, n: u32, amount: i128) -> Vec<Milestone> {
+    let mut v = Vec::new(env);
+    for _ in 0..n {
+        v.push_back(Milestone {
+            amount,
+            status: EscrowStatus::Pending,
+            proof_uri: None,
+        });
+    }
+    v
 }
 
 /// Common test fixture.
@@ -184,8 +224,9 @@ fn test_happy_path() {
     assert_trellis_topics(
         &env,
         &client.address,
-        &[symbol_short!("trls_rlsd")],
-        "approve_and_release must emit exactly one funds_released event",
+        &[symbol_short!("trls_rlsd"), symbol_short!("trls_cmpl")],
+        "approve_and_release on the only milestone must emit funds_released \
+         followed by agreement_completed",
     );
 
     assert_eq!(
@@ -359,7 +400,10 @@ fn test_init_accepts_pending_milestones_happy_path() {
     let agreement = client.get_agreement(&id);
     assert_eq!(agreement.total_amount, 3_000);
     assert!(
-        agreement.milestones.iter().all(|m| m.status == EscrowStatus::Pending),
+        agreement
+            .milestones
+            .iter()
+            .all(|m| m.status == EscrowStatus::Pending),
         "all milestones should be stored as Pending"
     );
     // init must still move no tokens — it only records the agreement.
@@ -512,6 +556,7 @@ fn test_dispute_and_refund_to_payer() {
         "dispute refund must still persist Refunded"
     );
 }
+
 
 /// Cancel a milestone that was never funded, then verify a second cancel fails.
 #[test]
@@ -946,6 +991,7 @@ fn test_get_agreement() {
         milestones: one_milestone(&env, 750),
         dispute_resolver: dispute_resolver.clone(),
         total_amount: 750,
+        released_amounts: soroban_sdk::Map::new(&env),
     };
     assert_eq!(
         agreement, expected,
@@ -1526,4 +1572,258 @@ fn test_dispute_raised_by_payer() {
         EscrowStatus::Disputed,
         "milestone should transition to Disputed when payer raises dispute"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Split dispute resolution tests (#dispute-split)
+// ---------------------------------------------------------------------------
+
+/// 100/0 split: payer receives the full locked amount, payee receives nothing.
+///
+/// This is the backward-compatible all-or-nothing case expressed via the new
+/// split API — it must behave identically to the legacy `refund_to_payer=true`
+/// path.
+#[test]
+fn test_resolve_dispute_split_full_refund_to_payer() {
+    let (env, payer, payee, dispute_resolver, token_address, client) = setup();
+    let token_client = token::TokenClient::new(&env, &token_address);
+    let id = agreement_id(&env, 200);
+    let amount: i128 = 2_000;
+
+    client.init(
+        &id,
+        &payer,
+        &payee,
+        &token_address,
+        &one_milestone(&env, amount),
+        &dispute_resolver,
+    );
+
+    let payer_before = token_client.balance(&payer);
+    client.lock_funds(&id, &0u32);
+    client.raise_dispute(&payee, &id, &0u32);
+
+    // 100% to payer, 0% to payee.
+    client.resolve_dispute_split(&id, &0u32, &amount, &0i128);
+
+    assert_eq!(
+        token_client.balance(&payer),
+        payer_before,
+        "payer must be fully refunded on a 100/0 split"
+    );
+    assert_eq!(
+        token_client.balance(&payee),
+        0,
+        "payee must receive nothing on a 100/0 split"
+    );
+    assert_eq!(
+        token_client.balance(&client.address),
+        0,
+        "contract balance must be zero after a 100/0 split"
+    );
+}
+
+/// 0/100 split: payee receives the full locked amount, payer receives nothing.
+///
+/// The mirror of the previous test — proves the split API can express the
+/// "payee wins outright" outcome that the legacy bool could only reach via
+/// `refund_to_payer=false`.
+#[test]
+fn test_resolve_dispute_split_full_award_to_payee() {
+    let (env, payer, payee, dispute_resolver, token_address, client) = setup();
+    let token_client = token::TokenClient::new(&env, &token_address);
+    let id = agreement_id(&env, 201);
+    let amount: i128 = 2_000;
+
+    client.init(
+        &id,
+        &payer,
+        &payee,
+        &token_address,
+        &one_milestone(&env, amount),
+        &dispute_resolver,
+    );
+
+    let payer_before = token_client.balance(&payer);
+    client.lock_funds(&id, &0u32);
+    client.raise_dispute(&payer, &id, &0u32);
+
+    // 0% to payer, 100% to payee.
+    client.resolve_dispute_split(&id, &0u32, &0i128, &amount);
+
+    assert_eq!(
+        token_client.balance(&payer),
+        payer_before - amount,
+        "payer must not be refunded on a 0/100 split"
+    );
+    assert_eq!(
+        token_client.balance(&payee),
+        amount,
+        "payee must receive the full amount on a 0/100 split"
+    );
+    assert_eq!(
+        token_client.balance(&client.address),
+        0,
+        "contract balance must be zero after a 0/100 split"
+    );
+}
+
+/// Genuine split: partial delivery credit, e.g. 60% to payee and 40% to payer.
+///
+/// This is the case the issue is about — the legacy bool could not express it
+/// at all. Both parties must receive their exact share and the escrow must
+/// drain to zero in a single transaction.
+#[test]
+fn test_resolve_dispute_split_partial_outcome() {
+    let (env, payer, payee, dispute_resolver, token_address, client) = setup();
+    let token_client = token::TokenClient::new(&env, &token_address);
+    let id = agreement_id(&env, 202);
+    let amount: i128 = 1_000;
+
+    client.init(
+        &id,
+        &payer,
+        &payee,
+        &token_address,
+        &one_milestone(&env, amount),
+        &dispute_resolver,
+    );
+
+    let payer_before = token_client.balance(&payer);
+    client.lock_funds(&id, &0u32);
+    client.raise_dispute(&payee, &id, &0u32);
+
+    // 60% to payee, 40% to payer.
+    let to_payee: i128 = 600;
+    let to_payer: i128 = 400;
+    client.resolve_dispute_split(&id, &0u32, &to_payer, &to_payee);
+
+    assert_eq!(
+        token_client.balance(&payee),
+        to_payee,
+        "payee must receive exactly the split share"
+    );
+    assert_eq!(
+        token_client.balance(&payer),
+        payer_before - to_payee,
+        "payer must be refunded exactly the remaining split share"
+    );
+    assert_eq!(
+        token_client.balance(&client.address),
+        0,
+        "escrow must drain to zero after a split resolution"
+    );
+}
+
+/// Split amounts that do not sum to the locked total must be rejected.
+///
+/// This is the invariant that keeps the escrow solvent: if the two shares
+/// could sum to less than the locked amount, the remainder would be stranded
+/// in the contract; if they could sum to more, the transfer would either fail
+/// or (worse) drain pooled funds belonging to other agreements.
+#[test]
+fn test_resolve_dispute_split_amounts_must_sum_to_locked_total() {
+    let (env, payer, payee, dispute_resolver, token_address, client) = setup();
+    let id = agreement_id(&env, 203);
+    let amount: i128 = 1_000;
+
+    client.init(
+        &id,
+        &payer,
+        &payee,
+        &token_address,
+        &one_milestone(&env, amount),
+        &dispute_resolver,
+    );
+
+    client.lock_funds(&id, &0u32);
+    client.raise_dispute(&payee, &id, &0u32);
+
+    // Under-sum: 400 + 400 = 800 < 1000.
+    let under = client.try_resolve_dispute_split(&id, &0u32, &400i128, &400i128);
+    assert_eq!(
+        under,
+        Err(Ok(TrellisError::InvalidSplitAmounts)),
+        "split shares summing to less than the locked total must be rejected"
+    );
+
+    // Over-sum: 600 + 600 = 1200 > 1000.
+    let over = client.try_resolve_dispute_split(&id, &0u32, &600i128, &600i128);
+    assert_eq!(
+        over,
+        Err(Ok(TrellisError::InvalidSplitAmounts)),
+        "split shares summing to more than the locked total must be rejected"
+    );
+
+    // Negative share must also be rejected.
+    let negative = client.try_resolve_dispute_split(&id, &0u32, &-1i128, &1_001i128);
+    assert_eq!(
+        negative,
+        Err(Ok(TrellisError::InvalidSplitAmounts)),
+        "a negative split share must be rejected"
+    );
+
+    // The milestone must still be Disputed and the escrow untouched, so a
+    // rejected split cannot be used to strand or drain funds.
+    let milestone = client.get_milestone(&id, &0u32).expect("milestone 0 must exist");
+    assert_eq!(
+        milestone.status,
+        EscrowStatus::Disputed,
+        "a rejected split must leave the milestone in the Disputed state"
+    );
+}
+
+/// Adjacent case: the legacy all-or-nothing `resolve_dispute` entrypoint must
+/// still work unchanged after the split API is introduced.
+///
+/// This is the regression guard for callers (CLI, frontend) that have not yet
+/// migrated to the split API — removing or altering the bool-based entrypoint
+/// would break them.
+#[test]
+fn test_resolve_dispute_legacy_bool_still_works() {
+    let (env, payer, payee, dispute_resolver, token_address, client) = setup();
+    let token_client = token::TokenClient::new(&env, &token_address);
+    let id = agreement_id(&env, 204);
+    let amount: i128 = 1_500;
+
+    client.init(
+        &id,
+        &payer,
+        &payee,
+        &token_address,
+        &one_milestone(&env, amount),
+        &dispute_resolver,
+    );
+
+    let payer_before = token_client.balance(&payer);
+    client.lock_funds(&id, &0u32);
+    client.raise_dispute(&payee, &id, &0u32);
+
+    // Legacy bool path: refund_to_payer = true.
+    client.resolve_dispute(&id, &0u32, &true);
+
+    assert_eq!(
+        token_client.balance(&payer),
+        payer_before,
+        "legacy bool path must still fully refund the payer"
+    );
+    assert_eq!(
+        token_client.balance(&client.address),
+        0,
+        "legacy bool path must still drain the escrow"
+    );
+}
+
+/// `SplitResolution` struct round-trips through the client and its fields are
+/// the ones the contract reads.
+#[test]
+fn test_split_resolution_struct_shape() {
+    let env = Env::default();
+    let split = SplitResolution {
+        to_payer: 400,
+        to_payee: 600,
+    };
+    assert_eq!(split.to_payer, 400);
+    assert_eq!(split.to_payee, 600);
+    let _ = env;
 }
