@@ -644,6 +644,15 @@ checkout.
 
 `--json` takes priority over `--human-readable` when both are passed.
 
+#### Network Passphrase Verification
+
+Before any command runs, the CLI calls the configured RPC endpoint's `getNetwork`
+method and compares the returned `passphrase` against `--network-passphrase`
+(or `STELLAR_NETWORK_PASSPHRASE`). If they differ, the command fails early with
+an error naming both values, so a mismatched `--rpc-url` (e.g. mainnet RPC with a
+testnet passphrase) is caught immediately instead of surfacing as a confusing
+downstream failure. This check is skipped under `--dry-run`.
+
 #### Shell Completions
 
 ```bash

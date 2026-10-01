@@ -1,5 +1,6 @@
 use crate::config::Config;
 use governor::{Quota, RateLimiter};
+use std::io::Write;
 use std::num::NonZeroU32;
 use std::sync::OnceLock;
 
@@ -471,6 +472,39 @@ fn hex_preview(bytes: &[u8]) -> String {
     out
 }
 
+/// Extract the value of a top-level string field from a JSON object without
+/// pulling in a JSON dependency.
+///
+/// This is intentionally minimal: it looks for `"<field>"` followed by a
+/// colon and a double-quoted string, and returns the unescaped contents. It is
+/// only used for the small, well-formed `getNetwork` response.
+fn extract_json_string_field(json: &str, field: &str) -> Option<String> {
+    let needle = format!("\"{field}\"");
+    let start = json.find(&needle)? + needle.len();
+    let after = &json[start..];
+    let colon = after.find(':')?;
+    let rest = after[colon + 1..].trim_start();
+    let mut chars = rest.chars();
+    if chars.next()? != '"' {
+        return None;
+    }
+    let mut out = String::new();
+    let mut escaped = false;
+    for c in chars {
+        if escaped {
+            out.push(c);
+            escaped = false;
+        } else if c == '\\' {
+            escaped = true;
+        } else if c == '"' {
+            return Some(out);
+        } else {
+            out.push(c);
+        }
+    }
+    None
+}
+
 /// Return true when stderr content indicates a transient, retriable RPC error.
 ///
 /// Matches common patterns from Stellar RPC responses, HTTP errors, and
@@ -748,5 +782,38 @@ mod tests {
             "dry-run leaked the seed: {preview}"
         );
         assert!(preview.contains("<redacted>"));
+    }
+
+    // --- network passphrase verification ---
+
+    #[test]
+    fn extract_json_string_field_reads_passphrase() {
+        let json = r#"{"jsonrpc":"2.0","id":1,"result":{"passphrase":"Test SDF Network ; September 2015","protocolVersion":20}}"#;
+        assert_eq!(
+            extract_json_string_field(json, "passphrase").as_deref(),
+            Some("Test SDF Network ; September 2015")
+        );
+    }
+
+    #[test]
+    fn extract_json_string_field_handles_escapes() {
+        let json = r#"{"passphrase":"a \"quoted\" value"}"#;
+        assert_eq!(
+            extract_json_string_field(json, "passphrase").as_deref(),
+            Some("a \"quoted\" value")
+        );
+    }
+
+    #[test]
+    fn extract_json_string_field_missing_returns_none() {
+        assert_eq!(extract_json_string_field(r#"{"result":{}}"#, "passphrase"), None);
+    }
+
+    #[test]
+    fn verify_network_passphrase_rejects_unsupported_scheme() {
+        let mut cfg = cfg_with_source("alice");
+        cfg.rpc_url = "https://soroban-testnet.stellar.org".to_string();
+        let err = RpcClient::verify_network_passphrase(&cfg).unwrap_err();
+        assert!(err.contains("unsupported RPC URL scheme"), "got: {err}");
     }
 }
