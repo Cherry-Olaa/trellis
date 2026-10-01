@@ -84,6 +84,45 @@ fn assert_trellis_topics(env: &Env, contract: &Address, expected: &[Symbol], msg
     );
 }
 
+/// Return the data payload of the single Trellis event named `name` from the
+/// most recent top-level invocation, decoded as `T`.
+fn trellis_event_data<T>(env: &Env, contract: &Address, name: Symbol) -> T
+where
+    T: TryFromVal<Env, soroban_sdk::Val>,
+{
+    let all_events = env.events().all();
+    let mut found: Option<T> = None;
+    for i in 0..all_events.len() {
+        let (contract_id, topics, data) = all_events.get_unchecked(i);
+        if contract_id != *contract {
+            continue;
+        }
+        let topic0 = Symbol::try_from_val(env, &topics.get_unchecked(0))
+            .expect("event topic 0 must decode as a Symbol");
+        if topic0 == name {
+            assert!(found.is_none(), "event {name:?} emitted more than once");
+            found = Some(
+                T::try_from_val(env, &data)
+                    .unwrap_or_else(|_| panic!("event {name:?} data has unexpected shape")),
+            );
+        }
+    }
+    found.unwrap_or_else(|| panic!("event {name:?} was not emitted"))
+}
+
+/// Build `n` Pending milestones of `amount` each.
+fn milestones(env: &Env, n: u32, amount: i128) -> Vec<Milestone> {
+    let mut v = Vec::new(env);
+    for _ in 0..n {
+        v.push_back(Milestone {
+            amount,
+            status: EscrowStatus::Pending,
+            proof_uri: None,
+        });
+    }
+    v
+}
+
 /// Common test fixture.
 ///
 /// Returns `(env, payer, payee, dispute_resolver, token_address, client)`.
@@ -185,8 +224,9 @@ fn test_happy_path() {
     assert_trellis_topics(
         &env,
         &client.address,
-        &[symbol_short!("trls_rlsd")],
-        "approve_and_release must emit exactly one funds_released event",
+        &[symbol_short!("trls_rlsd"), symbol_short!("trls_cmpl")],
+        "approve_and_release on the only milestone must emit funds_released \
+         followed by agreement_completed",
     );
 
     assert_eq!(
@@ -358,7 +398,10 @@ fn test_init_accepts_pending_milestones_happy_path() {
     let agreement = client.get_agreement(&id);
     assert_eq!(agreement.total_amount, 3_000);
     assert!(
-        agreement.milestones.iter().all(|m| m.status == EscrowStatus::Pending),
+        agreement
+            .milestones
+            .iter()
+            .all(|m| m.status == EscrowStatus::Pending),
         "all milestones should be stored as Pending"
     );
     // init must still move no tokens — it only records the agreement.
@@ -853,6 +896,7 @@ fn test_get_agreement() {
         milestones: one_milestone(&env, 750),
         dispute_resolver: dispute_resolver.clone(),
         total_amount: 750,
+        released_amounts: soroban_sdk::Map::new(&env),
     };
     assert_eq!(
         agreement, expected,

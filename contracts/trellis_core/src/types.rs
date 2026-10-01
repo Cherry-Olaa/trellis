@@ -1,4 +1,4 @@
-use soroban_sdk::{contracttype, Address, BytesN, String, Vec};
+use soroban_sdk::{contracttype, Address, BytesN, Map, String, Vec};
 
 // ---------------------------------------------------------------------------
 // EscrowStatus — lifecycle state machine for an escrow agreement / milestone
@@ -115,4 +115,18 @@ pub struct Agreement {
     /// there is no entrypoint that adds, removes, or resizes milestones after
     /// `init`, so it never needs recomputation.
     pub total_amount: i128,
+    /// Cumulative amount already paid out to the payee per milestone via
+    /// partial releases, keyed by milestone index.
+    ///
+    /// Empty at `init`; only `release_partial` inserts entries. A milestone
+    /// with no entry has released nothing. The amount still held in escrow
+    /// for a milestone is always `milestone.amount - released_amounts[id]`,
+    /// and every later payout (`approve_and_release`, `resolve_dispute`)
+    /// moves only that remainder, so the sum paid out for a milestone can
+    /// never exceed what was locked for it.
+    ///
+    /// Stored inside the agreement record rather than under its own ledger
+    /// key so it shares the agreement's TTL: a separately-archived counter
+    /// would silently read back as zero and allow a double payout.
+    pub released_amounts: Map<u32, i128>,
 }

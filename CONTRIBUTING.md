@@ -250,9 +250,11 @@ Transitions and entrypoints:
 - `Funded -> WorkSubmitted` is triggered by `submit_work`. The payee attaches proof of completed work.
 - `Funded -> Disputed` is triggered by `raise_dispute`. Either payer or payee can request resolver review before work is submitted.
 - `WorkSubmitted -> Completed` is triggered by `approve_and_release`. The payer accepts the work and funds are released to the payee.
+- `Funded -> Completed` / `WorkSubmitted -> Completed` is triggered by `release_partial` once the cumulative partial releases equal the milestone amount. A partial release that leaves funds in escrow keeps the milestone in its current status; `approve_and_release` and `resolve_dispute` then only move the remaining escrowed amount.
 - `WorkSubmitted -> Disputed` is triggered by `raise_dispute`. Either side can escalate submitted work for resolver review.
 - `Disputed -> Refunded` is triggered by `resolve_dispute` when the resolver rules for the payer.
 - `Disputed -> Completed` is triggered by `resolve_dispute` when the resolver rules for the payee.
+- When a transition leaves every milestone in `Completed` or `Refunded`, the contract also emits `agreement_completed` (`trls_cmpl`) once for the whole agreement.
 - `get_agreement` is read-only. It does not transition state; it returns the current agreement snapshot.
 - `init` creates the agreement and starts each milestone in `Pending`.
 

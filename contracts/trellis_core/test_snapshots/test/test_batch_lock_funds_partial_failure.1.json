@@ -87,14 +87,6 @@
                         },
                         {
                           "key": {
-                            "symbol": "id"
-                          },
-                          "val": {
-                            "u32": 0
-                          }
-                        },
-                        {
-                          "key": {
                             "symbol": "proof_uri"
                           },
                           "val": "void"
@@ -124,14 +116,6 @@
                               "hi": 0,
                               "lo": 500
                             }
-                          }
-                        },
-                        {
-                          "key": {
-                            "symbol": "id"
-                          },
-                          "val": {
-                            "u32": 1
                           }
                         },
                         {
@@ -458,14 +442,6 @@
                               },
                               {
                                 "key": {
-                                  "symbol": "id"
-                                },
-                                "val": {
-                                  "u32": 0
-                                }
-                              },
-                              {
-                                "key": {
                                   "symbol": "proof_uri"
                                 },
                                 "val": "void"
@@ -495,14 +471,6 @@
                                     "hi": 0,
                                     "lo": 500
                                   }
-                                }
-                              },
-                              {
-                                "key": {
-                                  "symbol": "id"
-                                },
-                                "val": {
-                                  "u32": 1
                                 }
                               },
                               {
@@ -542,6 +510,14 @@
                       },
                       "val": {
                         "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM"
+                      }
+                    },
+                    {
+                      "key": {
+                        "symbol": "released_amounts"
+                      },
+                      "val": {
+                        "map": []
                       }
                     },
                     {
