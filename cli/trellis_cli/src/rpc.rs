@@ -5,30 +5,13 @@ use std::io::Write;
 use std::num::NonZeroU32;
 use std::sync::OnceLock;
 
-static RPC_RATE_LIMITER: OnceLock<RateLimiter> = OnceLock::new();
-
-fn get_rate_limiter() -> &'static RateLimiter {
-    RPC_RATE_LIMITER.get_or_init(|| {
-        let limit_per_sec: u32 = std::env::var("STELLAR_RPC_RATE_LIMIT")
-            .ok()
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(10);
-
-        if let Some(limit) = NonZeroU32::new(limit_per_sec) {
-            RateLimiter::direct(Quota::per_second(limit))
-        } else {
-            RateLimiter::direct(Quota::per_second(NonZeroU32::new(10).unwrap()))
-        }
-    })
-}
-
-fn apply_rate_limit() {
-    let limiter = get_rate_limiter();
-    if limiter.check().is_err() {
-        eprintln!("⚠️  RPC rate limit active — request queued until quota resets");
-        limiter.until_ready().wait();
-    }
-}
+/// Default hard timeout (in seconds) for a single `stellar` subprocess call.
+///
+/// The process is killed and a transient error is returned when this elapses,
+/// allowing the existing retry/backoff logic to attempt again. Set
+/// `STELLAR_INVOKE_TIMEOUT_SECS=0` to disable the timeout entirely (not
+/// recommended in production).
+const DEFAULT_INVOKE_TIMEOUT_SECS: u64 = 30;
 
 /// Output from a Soroban contract invoke.
 #[derive(Debug)]
@@ -641,13 +624,29 @@ impl RpcClient {
     }
 
     /// Single attempt at invoking the stellar CLI — no retry logic here.
+    ///
+    /// A hard timeout is applied: if the child process does not finish within
+    /// `STELLAR_INVOKE_TIMEOUT_SECS` (default 30 s), it is forcibly killed and
+    /// an `InvokeOutput` with a transient-error message is returned so the
+    /// caller's retry loop can act on it. Set `STELLAR_INVOKE_TIMEOUT_SECS=0`
+    /// to disable the timeout.
     fn invoke_once(config: &Config, fn_name: &str, args: &[String]) -> InvokeOutput {
-        use std::process::Command;
+        use std::process::{Command, Stdio};
+        use std::sync::mpsc;
+        use std::time::Duration;
 
         let (cmd_args, command_debug) = Self::build_cmd_args(config, fn_name, args);
 
+        // Resolve the per-call timeout from the environment.
+        let timeout_secs: u64 = std::env::var("STELLAR_INVOKE_TIMEOUT_SECS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(DEFAULT_INVOKE_TIMEOUT_SECS);
+
         let mut command = Command::new(stellar_bin());
         command.args(&cmd_args);
+        command.stdout(Stdio::piped());
+        command.stderr(Stdio::piped());
 
         // #240: hand a raw secret seed to the child via its environment rather
         // than argv so it cannot be read from `ps` / `/proc/<pid>/cmdline`.
@@ -655,24 +654,100 @@ impl RpcClient {
             command.env("STELLAR_SECRET_KEY", &config.source_key);
         }
 
-        let output = command.output();
+        // Spawn the child process.
+        let mut child = match command.spawn() {
+            Ok(c) => c,
+            Err(e) => {
+                return InvokeOutput {
+                    stdout: String::new(),
+                    stderr: format!(
+                        "Failed to spawn `stellar` CLI: {e}\n\
+                         Is the Stellar CLI installed?  https://developers.stellar.org/docs/tools/cli/install-cli"
+                    ),
+                    success: false,
+                    command_debug,
+                };
+            }
+        };
 
-        match output {
-            Ok(out) => InvokeOutput {
-                stdout: decode_process_output("stdout", out.stdout),
-                stderr: decode_process_output("stderr", out.stderr),
-                success: out.status.success(),
-                command_debug,
-            },
-            Err(e) => InvokeOutput {
-                stdout: String::new(),
-                stderr: format!(
-                    "Failed to spawn `stellar` CLI: {e}\n\
-                     Is the Stellar CLI installed?  https://developers.stellar.org/docs/tools/cli/install-cli"
-                ),
-                success: false,
-                command_debug,
-            },
+        // Zero timeout means "no limit" — fall back to a simple blocking wait.
+        if timeout_secs == 0 {
+            let output = child.wait_with_output();
+            return match output {
+                Ok(out) => InvokeOutput {
+                    stdout: decode_process_output("stdout", out.stdout),
+                    stderr: decode_process_output("stderr", out.stderr),
+                    success: out.status.success(),
+                    command_debug,
+                },
+                Err(e) => InvokeOutput {
+                    stdout: String::new(),
+                    stderr: format!("Failed to wait for `stellar` CLI: {e}"),
+                    success: false,
+                    command_debug,
+                },
+            };
+        }
+
+        // Drive the child on a background thread; the main thread races it
+        // against a deadline via an `mpsc` channel so it can kill the process
+        // if it exceeds the timeout without blocking forever itself.
+        let (tx, rx) = mpsc::channel();
+        let handle = std::thread::spawn(move || {
+            let result = child.wait_with_output();
+            // Ignore send errors: a timeout-triggered kill may have caused
+            // the receiver to drop before we get here.
+            let _ = tx.send(result);
+        });
+
+        match rx.recv_timeout(Duration::from_secs(timeout_secs)) {
+            Ok(Ok(out)) => {
+                let _ = handle.join();
+                InvokeOutput {
+                    stdout: decode_process_output("stdout", out.stdout),
+                    stderr: decode_process_output("stderr", out.stderr),
+                    success: out.status.success(),
+                    command_debug,
+                }
+            }
+            Ok(Err(e)) => {
+                let _ = handle.join();
+                InvokeOutput {
+                    stdout: String::new(),
+                    stderr: format!("Failed to wait for `stellar` CLI: {e}"),
+                    success: false,
+                    command_debug,
+                }
+            }
+            // Timeout — the child is still running.  Kill it, then let the
+            // background thread finish so we do not leak OS resources.
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                // `wait_with_output` inside the thread has taken ownership of
+                // `child`, so we cannot call `child.kill()` directly any more.
+                // The thread will see the process exit (or an error) after the
+                // OS kills it through the handle it holds internally. We detach
+                // here; the OS will reap the zombie when the thread unblocks.
+                drop(handle);
+                InvokeOutput {
+                    stdout: String::new(),
+                    stderr: format!(
+                        "subprocess timed out: `stellar` did not respond within \
+                         {timeout_secs}s. The process has been abandoned. \
+                         You can raise STELLAR_INVOKE_TIMEOUT_SECS to allow more time."
+                    ),
+                    success: false,
+                    command_debug,
+                }
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                let _ = handle.join();
+                InvokeOutput {
+                    stdout: String::new(),
+                    stderr: "internal error: worker thread exited unexpectedly".to_string(),
+                    success: false,
+                    command_debug,
+                }
+            }
         }
     }
 }
@@ -777,9 +852,15 @@ fn extract_json_string_field(json: &str, field: &str) -> Option<String> {
 /// which would send the CLI into an endless retry loop (issue #249). Each entry
 /// below is an exact phrase that only appears in genuinely transient failures;
 /// add a negative test to `non_transient_*` whenever a new pattern is added.
+///
+/// HTTP status codes (429, 502, 503, 504) are matched with
+/// `contains_http_status_code` rather than a space-anchored substring so that
+/// shapes like `"429: too many requests"` or `"Error(429)"` are also detected
+/// (issue #412).
 fn is_transient_error(stderr: &str) -> bool {
     let lower = stderr.to_lowercase();
     const TRANSIENT_PATTERNS: &[&str] = &[
+        "subprocess timed out",
         "timeout",
         "timed out",
         "connection refused",
@@ -799,12 +880,48 @@ fn is_transient_error(stderr: &str) -> bool {
         "deadline exceeded",
         "host unreachable",
         "no route to host",
-        " 429",
-        " 502",
-        " 503",
-        " 504",
     ];
-    TRANSIENT_PATTERNS.iter().any(|p| lower.contains(p))
+    if TRANSIENT_PATTERNS.iter().any(|p| lower.contains(p)) {
+        return true;
+    }
+    // Match transient HTTP status codes regardless of surrounding punctuation
+    // (e.g. "429: ...", "Error(429)", "status=429", " 429 ").  We require only
+    // that the three-digit code is not immediately adjacent to another digit so
+    // we do not accidentally match a longer number such as "14290" or "5040".
+    const TRANSIENT_CODES: &[&str] = &["429", "502", "503", "504"];
+    TRANSIENT_CODES
+        .iter()
+        .any(|code| contains_http_status_code(&lower, code))
+}
+
+/// Return true when `haystack` contains `code` (a bare ASCII digit sequence)
+/// that is not immediately preceded or followed by another ASCII digit.
+///
+/// This is a simple word-boundary check that avoids pulling in the `regex`
+/// crate while still matching all common error-text shapes:
+/// `"HTTP 429"`, `"429: too many requests"`, `"Error(429)"`, `"status=429"`.
+fn contains_http_status_code(haystack: &str, code: &str) -> bool {
+    let bytes = haystack.as_bytes();
+    let code_bytes = code.as_bytes();
+    let code_len = code_bytes.len();
+
+    if code_len > bytes.len() {
+        return false;
+    }
+
+    for i in 0..=(bytes.len() - code_len) {
+        if &bytes[i..i + code_len] == code_bytes {
+            // Ensure the character before (if any) is not a digit.
+            let preceded_by_digit = i > 0 && bytes[i - 1].is_ascii_digit();
+            // Ensure the character after (if any) is not a digit.
+            let followed_by_digit =
+                i + code_len < bytes.len() && bytes[i + code_len].is_ascii_digit();
+            if !preceded_by_digit && !followed_by_digit {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 /// Compute a 0–199 ms jitter value from the subsecond part of the system clock.
@@ -846,6 +963,35 @@ mod tests {
         assert!(is_transient_error("HTTP 503 Service Unavailable"));
         assert!(is_transient_error("upstream error: 502 Bad Gateway"));
         assert!(is_transient_error("gateway timeout: 504"));
+    }
+
+    /// #412: status codes must be detected even when not space-prefixed.
+    #[test]
+    fn transient_detects_unanchored_http_status_codes() {
+        // "429: <message>" — colon immediately after the code, no leading space
+        assert!(is_transient_error("429: too many requests"));
+        assert!(is_transient_error("502: bad gateway"));
+        assert!(is_transient_error("503: service unavailable"));
+        assert!(is_transient_error("504: gateway timeout"));
+
+        // "Error(429)" — code wrapped in parentheses
+        assert!(is_transient_error("Error(429)"));
+        assert!(is_transient_error("rpc error(503): upstream unavailable"));
+
+        // "status=429" — code after an equals sign
+        assert!(is_transient_error("http status=429"));
+    }
+
+    /// #412 + #249: a longer number that merely *contains* a transient code as
+    /// a substring must not trigger a retry (false-positive guard).
+    #[test]
+    fn non_transient_longer_numbers_not_retried() {
+        // 14290, 5040, 15030, 25040 — all contain a transient code as a
+        // contiguous substring but are not the bare three-digit code itself.
+        assert!(!is_transient_error("error code 14290"));
+        assert!(!is_transient_error("transaction fee 5040 stroops"));
+        assert!(!is_transient_error("ledger 15030 not found"));
+        assert!(!is_transient_error("sequence 25040 too old"));
     }
 
     #[test]
@@ -1005,7 +1151,104 @@ mod tests {
         std::env::remove_var("STELLAR_RPC_RETRIES");
     }
 
-    // --- #240: secret seed never reaches argv / printed output ---
+    // --- invoke_once timeout (#410) ---
+
+    /// Helper: build a minimal Config for timeout tests.
+    fn timeout_test_config() -> Config {
+        Config {
+            rpc_url: "https://soroban-testnet.stellar.org".to_string(),
+            network_passphrase: "Test SDF Network ; September 2015".to_string(),
+            contract_id: "CAABC123".to_string(),
+            source_key: "alice".to_string(),
+        }
+    }
+
+    /// Path to the platform-appropriate hang mock script.
+    fn hang_mock_bin() -> String {
+        let manifest_dir = std::env::var("CARGO_MANIFEST_DIR")
+            .unwrap_or_else(|_| ".".to_string());
+        if cfg!(windows) {
+            format!("{manifest_dir}/tests/mock_stellar_hang.bat")
+        } else {
+            format!("{manifest_dir}/tests/mock_stellar_hang.sh")
+        }
+    }
+
+    /// When the stellar process hangs, invoke_once must return before the test
+    /// times out — well within the 1 s timeout we set here.
+    #[test]
+    fn invoke_once_returns_when_subprocess_hangs() {
+        // Point at the hang mock; ensure test mode is active.
+        std::env::set_var("TRELLIS_TEST_MODE", "true");
+        std::env::set_var("STELLAR_MOCK_BIN", hang_mock_bin());
+        // 1-second hard timeout so the test suite stays fast.
+        std::env::set_var("STELLAR_INVOKE_TIMEOUT_SECS", "1");
+
+        let start = std::time::Instant::now();
+        let out = RpcClient::invoke_once(&timeout_test_config(), "init", &[]);
+        let elapsed = start.elapsed();
+
+        // Must return well within 5 s even if there's scheduling jitter.
+        assert!(
+            elapsed.as_secs() < 5,
+            "invoke_once blocked for {}s — timeout did not fire",
+            elapsed.as_secs()
+        );
+        assert!(!out.success, "hanging process must not be treated as success");
+        assert!(
+            out.stderr.contains("subprocess timed out"),
+            "stderr should contain 'subprocess timed out'; got: {}",
+            out.stderr
+        );
+
+        std::env::remove_var("STELLAR_INVOKE_TIMEOUT_SECS");
+        std::env::remove_var("STELLAR_MOCK_BIN");
+        std::env::remove_var("TRELLIS_TEST_MODE");
+    }
+
+    /// The error message from a timed-out subprocess must be recognised as a
+    /// transient error so the retry loop will attempt again.
+    #[test]
+    fn timeout_error_is_treated_as_transient() {
+        let timeout_stderr = format!(
+            "subprocess timed out: `stellar` did not respond within 30s. \
+             The process has been abandoned. \
+             You can raise STELLAR_INVOKE_TIMEOUT_SECS to allow more time."
+        );
+        assert!(
+            is_transient_error(&timeout_stderr),
+            "timeout error must be classified as transient so the retry logic fires"
+        );
+    }
+
+    /// STELLAR_INVOKE_TIMEOUT_SECS=0 must disable the timeout entirely and
+    /// let a fast mock finish normally.
+    #[test]
+    fn timeout_disabled_when_set_to_zero() {
+        std::env::set_var("TRELLIS_TEST_MODE", "true");
+        // Point at the normal (fast) mock, not the hang mock.
+        let manifest_dir = std::env::var("CARGO_MANIFEST_DIR")
+            .unwrap_or_else(|_| ".".to_string());
+        let fast_mock = if cfg!(windows) {
+            format!("{manifest_dir}/tests/mock_stellar.bat")
+        } else {
+            format!("{manifest_dir}/tests/mock_stellar.sh")
+        };
+        std::env::set_var("STELLAR_MOCK_BIN", &fast_mock);
+        std::env::set_var("STELLAR_INVOKE_TIMEOUT_SECS", "0");
+
+        // `init` on the fast mock exits 0 immediately.
+        let out = RpcClient::invoke_once(&timeout_test_config(), "init", &[]);
+        assert!(
+            out.success,
+            "fast mock with timeout disabled should succeed; stderr: {}",
+            out.stderr
+        );
+
+        std::env::remove_var("STELLAR_INVOKE_TIMEOUT_SECS");
+        std::env::remove_var("STELLAR_MOCK_BIN");
+        std::env::remove_var("TRELLIS_TEST_MODE");
+    }
 
     fn cfg_with_source(source_key: &str) -> Config {
         Config {
