@@ -42,7 +42,7 @@
 //!    sweep with `PROPTEST_CASES=10000 cargo test test_properties`.
 
 use proptest::prelude::*;
-use soroban_sdk::{token, BytesN};
+use soroban_sdk::{testutils::Address as _, token, Address, BytesN, Env, Vec};
 
 use crate::{
     errors::TrellisError,

@@ -137,7 +137,8 @@ export function useMilestoneActions(milestone: Milestone, agreement: Agreement, 
     availableActions.push({ label: 'Approve & Release', action: handleApproveRelease, requiresWallet: true });
   }
 
-  if ((milestone.status === 'Funded' || milestone.status === 'WorkSubmitted') && wallet.connected) {
+  // raise_dispute rejects any caller other than the payer or payee.
+  if ((milestone.status === 'Funded' || milestone.status === 'WorkSubmitted') && wallet.connected && (isUserPayer || isUserPayee)) {
     availableActions.push({ label: 'Raise Dispute', action: handleRaiseDispute, requiresWallet: true });
   }
 

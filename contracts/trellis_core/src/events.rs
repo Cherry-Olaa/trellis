@@ -26,6 +26,8 @@ use soroban_sdk::{symbol_short, Address, BytesN, Env, String};
 //   6. "trls_rslv"  ( 9 chars) → symbol_short! — milestone_resolved (abbreviated)
 //   7. "trls_cncl"  ( 9 chars) → symbol_short! — milestone_cancelled(abbreviated)
 //   8. "trls_ttle"  ( 9 chars) → symbol_short! — ttl_extended       (abbreviated)
+//   9. "trls_prtl"  ( 9 chars) → symbol_short! — funds_partially_released (abbreviated)
+//  10. "trls_cmpl"  ( 9 chars) → symbol_short! — agreement_completed (abbreviated)
 //
 // All abbreviations follow the pattern: drop the vowels from the root word
 // while keeping enough consonants to be unambiguous.  They are intentional
@@ -37,9 +39,22 @@ use soroban_sdk::{symbol_short, Address, BytesN, Env, String};
 //   3. "submitted" → (milestone_id: u32, proof_uri: Option<String>)
 //   4. "released"  → (milestone_id: u32, amount: i128)
 //   5. "disputed"  → (milestone_id: u32, caller: Address)
-//   6. "resolved"  → (milestone_id: u32, refunded_to_payer: bool)
+//   6. "resolved"  → (milestone_id: u32, payer_amount: i128, payee_amount: i128)
 //   7. "cancelled" → (milestone_id: u32, payer: Address, cancelled_by: Address)
 //   8. "ttl_extended" → (caller: Address)
+//   9. "partially_released" → (milestone_id: u32, amount: i128, remaining: i128)
+//  10. "agreement_completed" → (completed_count: u32, refunded_count: u32)
+//
+// Schema changes: the `amount` field on "disputed", "resolved" and
+// "cancelled" was appended as the last tuple element, so an indexer that
+// decodes those payloads positionally keeps reading the earlier fields at
+// the same indices. Every fund-movement event now carries an amount.
+//
+// `amount` semantics: on "released", "disputed" and "resolved" it is the
+// amount still held in escrow for the milestone at the time of the call —
+// the milestone's configured `amount` minus anything already paid out via
+// `release_partial`. With no partial releases this equals the milestone's
+// stored amount. On "cancelled" it is the proposed (never funded) amount.
 //
 // "trls_rslv" and "trls_cncl" are deliberately distinct: an indexer must be
 // able to tell an arbitrated dispute outcome apart from a payer walking back a
@@ -92,6 +107,9 @@ pub fn work_submitted(
 ///
 /// Topics: `("trls_rlsd", agreement_id)`
 /// Data:   `(milestone_id, amount)`
+///
+/// `amount` is what this call actually transferred: the milestone's amount
+/// minus anything already paid out through [`funds_partially_released`].
 pub fn funds_released(env: &Env, agreement_id: BytesN<32>, milestone_id: u32, amount: i128) {
     env.events().publish(
         (symbol_short!("trls_rlsd"), agreement_id.clone()),
@@ -102,15 +120,25 @@ pub fn funds_released(env: &Env, agreement_id: BytesN<32>, milestone_id: u32, am
 /// Emitted when either party raises a dispute on a funded or work-submitted milestone.
 ///
 /// Topics: `("trls_dspt", agreement_id)`
-/// Data:   `(milestone_id, caller)`
+/// Data:   `(milestone_id, caller, amount)`
 ///
 /// `caller` is the party (payer or payee) that triggered the dispute, provided
 /// as a typed `Address` so indexers can identify the initiating party without
 /// importing contract WASM types.
-pub fn dispute_raised(env: &Env, agreement_id: BytesN<32>, milestone_id: u32, caller: Address) {
+///
+/// `amount` is the escrowed amount at stake in the dispute — the milestone's
+/// amount minus anything already partially released — so a dispute dashboard
+/// does not need to cross-reference the earlier `funds_locked` event.
+pub fn dispute_raised(
+    env: &Env,
+    agreement_id: BytesN<32>,
+    milestone_id: u32,
+    caller: Address,
+    amount: i128,
+) {
     env.events().publish(
         (symbol_short!("trls_dspt"), agreement_id.clone()),
-        (milestone_id, caller),
+        (milestone_id, caller, amount),
     );
 }
 
@@ -120,19 +148,24 @@ pub fn dispute_raised(env: &Env, agreement_id: BytesN<32>, milestone_id: u32, ca
 /// **not** emitted for cancellations — see [`milestone_cancelled`].
 ///
 /// Topics: `("trls_rslv", agreement_id)`
-/// Data:   `(milestone_id, refunded_to_payer)`
+/// Data:   `(milestone_id, payer_amount, payee_amount)`
 ///
-/// `refunded_to_payer = true`  → locked funds returned to payer.
-/// `refunded_to_payer = false` → locked funds awarded to payee.
+/// `payer_amount` is the portion of the locked milestone amount returned to
+/// the payer; `payee_amount` is the portion awarded to the payee. The two
+/// amounts always sum to the milestone's locked total, so indexers can
+/// reconstruct the split without reading contract state. All-or-nothing
+/// outcomes are represented as `(payer_amount = total, payee_amount = 0)` or
+/// `(payer_amount = 0, payee_amount = total)`.
 pub fn milestone_resolved(
     env: &Env,
     agreement_id: BytesN<32>,
     milestone_id: u32,
-    refunded_to_payer: bool,
+    payer_amount: i128,
+    payee_amount: i128,
 ) {
     env.events().publish(
         (symbol_short!("trls_rslv"), agreement_id.clone()),
-        (milestone_id, refunded_to_payer),
+        (milestone_id, payer_amount, payee_amount),
     );
 }
 
@@ -143,22 +176,78 @@ pub fn milestone_resolved(
 /// proposal, not as a dispute outcome.
 ///
 /// Topics: `("trls_cncl", agreement_id)`
-/// Data:   `(milestone_id, payer, cancelled_by)`
+/// Data:   `(milestone_id, payer, cancelled_by, amount)`
 ///
 /// `payer` is the agreement's payer; `cancelled_by` is the address that
 /// authorised the cancellation. These are the same address today (only the
 /// payer may cancel) but are reported separately so the event stays
 /// self-describing if delegated cancellation is ever added.
+///
+/// `amount` is the milestone's proposed amount. It was never escrowed, so no
+/// tokens move — it lets an indexer show "a $X milestone was withdrawn"
+/// without a separate query. Any future cancellation-adjacent event (e.g. a
+/// payee-side withdrawal) should carry the same trailing `amount` field.
 pub fn milestone_cancelled(
     env: &Env,
     agreement_id: BytesN<32>,
     milestone_id: u32,
     payer: Address,
     cancelled_by: Address,
+    amount: i128,
 ) {
     env.events().publish(
         (symbol_short!("trls_cncl"), agreement_id.clone()),
-        (milestone_id, payer, cancelled_by),
+        (milestone_id, payer, cancelled_by, amount),
+    );
+}
+
+/// Emitted when the payer releases part of a milestone's escrowed amount to
+/// the payee ahead of (or instead of) full approval.
+///
+/// Topics: `("trls_prtl", agreement_id)`
+/// Data:   `(milestone_id, amount, remaining)`
+///
+/// `amount` is what this call transferred; `remaining` is what is still held
+/// in escrow for the milestone afterwards. `remaining == 0` means the
+/// milestone moved to `Completed` in the same call.
+pub fn funds_partially_released(
+    env: &Env,
+    agreement_id: BytesN<32>,
+    milestone_id: u32,
+    amount: i128,
+    remaining: i128,
+) {
+    env.events().publish(
+        (symbol_short!("trls_prtl"), agreement_id.clone()),
+        (milestone_id, amount, remaining),
+    );
+}
+
+/// Emitted once per agreement, when its last non-terminal milestone reaches a
+/// terminal state.
+///
+/// "Completed" here means *settled*: every milestone is either `Completed`
+/// (paid to the payee, by approval, full partial release, or a ruling for
+/// the payee) or `Refunded` (returned to the payer by a ruling, or cancelled
+/// before funding). No milestone can transition again, and the agreement
+/// holds no escrowed funds. It does **not** mean every milestone was paid
+/// out — use the counts to tell a fully delivered agreement from one that
+/// was partly or wholly refunded.
+///
+/// Topics: `("trls_cmpl", agreement_id)`
+/// Data:   `(completed_count, refunded_count)`
+///
+/// It is emitted after the milestone-level event of the transition that
+/// triggered it, in the same invocation.
+pub fn agreement_completed(
+    env: &Env,
+    agreement_id: BytesN<32>,
+    completed_count: u32,
+    refunded_count: u32,
+) {
+    env.events().publish(
+        (symbol_short!("trls_cmpl"), agreement_id.clone()),
+        (completed_count, refunded_count),
     );
 }
 

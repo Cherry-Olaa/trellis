@@ -1,0 +1,59 @@
+# EditorConfig — https://editorconfig.org
+#
+# Cross-editor formatting consistency for the Trellis monorepo.
+# Editors that support EditorConfig (VS Code, JetBrains, Vim, Emacs, …)
+# will pick these rules up automatically, so contributors stop fighting
+# over tabs-vs-spaces, line endings, and trailing whitespace.
+
+root = true
+
+# ─── Project-wide defaults ────────────────────────────────────────────────
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+indent_style = space
+indent_size = 2
+
+# ─── Rust (contracts workspace, cli) ──────────────────────────────────────
+[*.rs]
+indent_size = 4
+max_line_length = 100
+
+[Cargo.toml]
+indent_size = 4
+
+# ─── TypeScript / JavaScript (frontend, tooling) ──────────────────────────
+[*.{ts,tsx,js,jsx,mjs,cjs}]
+indent_size = 2
+
+# ─── Python (cli/trellis_cli) ─────────────────────────────────────────────
+[*.py]
+indent_size = 4
+max_line_length = 100
+
+# ─── Structured data & config ─────────────────────────────────────────────
+[*.{json,jsonc}]
+indent_size = 2
+
+[*.{yml,yaml}]
+indent_size = 2
+
+[*.toml]
+indent_size = 2
+
+# ─── Markup & styles ──────────────────────────────────────────────────────
+[*.{css,scss}]
+indent_size = 2
+
+[*.md]
+# Hard line breaks in Markdown are meaningful; do not strip them.
+trim_trailing_whitespace = false
+
+# ─── Shell & build tooling ────────────────────────────────────────────────
+[*.{sh,bash}]
+indent_size = 2
+
+[Makefile]
+indent_style = tab

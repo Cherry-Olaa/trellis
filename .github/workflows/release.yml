@@ -143,6 +143,14 @@ jobs:
         with:
           targets: wasm32-unknown-unknown
 
+      # Fail release builds if Cargo.lock is not consistent with Cargo.toml.
+      - name: Verify Cargo.lock is up-to-date
+        run: |
+          set -euo pipefail
+          echo "::group::Cargo.lock verification"
+          cargo check --locked --workspace
+          echo "::endgroup::"
+
       - name: Build trellis_core WASM
         # `cargo rustc` targeting wasm32-unknown-unknown, not `stellar contract
         # build` (wasm32v1-none) — see DEPLOYMENT.md for why.

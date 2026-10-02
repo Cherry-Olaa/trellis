@@ -1,0 +1,35 @@
+# CODEOWNERS
+#
+# GitHub requests a review from the owners below whenever a pull request
+# touches a matching path. When several patterns match the same file, the
+# LAST matching rule wins, so keep specific rules after broader ones.
+#
+# Owners must have write access to this repository, otherwise review
+# requests silently fail. See the "Review Ownership and CODEOWNERS"
+# section of CONTRIBUTING.md before adding or changing owners here.
+
+# --- Default fallback: everything not matched explicitly -------------------
+# Root manifests, tooling configs, and any new top-level directory.
+*                                   @ALLEN-AYODEJI
+
+# --- Smart contracts (Soroban / trellis_core) -------------------------------
+/contracts/                         @ALLEN-AYODEJI
+/Cargo.toml                         @ALLEN-AYODEJI
+/Cargo.lock                         @ALLEN-AYODEJI
+/rust-toolchain.toml                @ALLEN-AYODEJI
+
+# --- CLI (trellis_cli) -------------------------------------------------------
+/cli/                               @ALLEN-AYODEJI
+
+# --- Frontend (React/Vite app) -----------------------------------------------
+/frontend/                          @ALLEN-AYODEJI @Folex1275
+
+# --- Scripts and repo tooling -------------------------------------------------
+/scripts/                           @ALLEN-AYODEJI
+/Makefile                           @ALLEN-AYODEJI
+
+# --- CI workflows and GitHub configuration --------------------------------------
+/.github/                           @ALLEN-AYODEJI @Oryke @Felamsy
+
+# --- Documentation and governance files ------------------------------------------
+/*.md                               @ALLEN-AYODEJI

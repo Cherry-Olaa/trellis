@@ -477,13 +477,20 @@ Trellis is a monorepo with three layers:
 | `init` | Payer | Creates a new agreement with one or more milestones (each `amount` must be strictly positive) |
 | `lock_funds` | Payer | Deposits funds for a milestone into the contract |
 | `submit_work` | Payee | Submits proof of completed work for a funded milestone |
-| `approve_and_release` | Payer | Approves submitted work, releases funds to payee |
+| `approve_and_release` | Payer | Approves submitted work, releases the remaining escrowed funds to payee |
+| `release_partial` | Payer | Releases part of a `Funded`/`WorkSubmitted` milestone's escrowed funds as a progress payment; the milestone completes once fully released |
 | `raise_dispute` | Payer or Payee | Flags a milestone for resolver review |
 | `resolve_dispute` | Dispute Resolver | Rules on a dispute — refunds payer or pays payee |
 | `cancel_unfunded_milestone` | Payer | Cancels a milestone that was never funded |
 | `get_agreement` | Anyone | Returns the full current state of an agreement (read-only) |
 | `get_total_amount` | Anyone | Returns the agreement's total value — sum of all milestone amounts (read-only) |
 | `extend_agreement_ttl` | Anyone | Renews an agreement's ledger TTL to avoid archival |
+
+<details>
+<summary>🧬 <strong>Native ScVal Encoding</strong></summary>
+<br />
+The CLI builds Soroban <code>ScVal</code> arguments natively in Rust instead of relying on the <code>stellar</code> CLI's JSON-to-XDR conversion. Scalar arguments (addresses, <code>i128</code> amounts, symbols) are encoded by the scalar encoder, and the milestone vector passed to <code>init</code> is encoded by a dedicated builder that mirrors the contract's exact <code>#[contracttype]</code> layout: each <code>Milestone</code> is a struct-of-fields map, <code>amount</code> is an <code>ScVal::I128</code>, and <code>status</code> is encoded as the <code>EscrowStatus::Pending</code> enum tag. The resulting <code>Vec&lt;Milestone&gt;</code> <code>ScVal</code> is cross-checked against what the <code>stellar</code> CLI produces for the same input.
+</details>
 
 <details>
 <summary>📦 <strong>Storage Lifetime</strong></summary>
@@ -524,7 +531,7 @@ npm install
 npm run dev
 ```
 
-Open **http://localhost:5173** to see the animated landing page with the particle network background, typewriter effects, and full agreement management UI.
+Open **http://localhost:5173** to see the animated landing page with the particle network background, typewriter effects, live contract activity stats (agreements created / milestones locked, within the RPC event retention window), and full agreement management UI.
 
 ### 🛠️ Build and test the contract
 
@@ -554,6 +561,16 @@ locally:
 cargo install --locked cargo-deny cargo-audit
 cargo deny check      # enforces deny.toml: advisories, licences, duplicate versions, sources
 cargo audit           # RustSec advisory database check
+```
+
+Note: Keep Cargo.lock in sync with Cargo.toml. CI now verifies the
+lockfile with `cargo check --locked --workspace` and will fail if it's out
+of date. To update the lockfile locally after changing dependencies run:
+
+```bash
+cargo update -p <pkg>
+# or to generate/update the lockfile explicitly:
+cargo generate-lockfile
 ```
 
 Policy lives in [`deny.toml`](./deny.toml) at the repository root. A new
@@ -626,7 +643,33 @@ trellis status --agreement-id <hex-id> --quiet
 trellis status --agreement-id <hex-id> --human-readable   # or -H
 ```
 
+Read-only queries (`status`, `milestone-status`) decode the raw XDR `ScVal`
+returned by `simulateTransaction` natively in the CLI — no `stellar` binary is
+required for these commands. The decoded result is rendered through the same
+`render_json`/`render_human` paths as every other command, so `--json`,
+`--human-readable`, and `--quiet` all behave identically whether or not the
+Stellar CLI is installed.
+
+`--dry-run` prints the `stellar contract invoke` command that would be executed
+without actually running it or submitting anything on-chain. Because it never
+spawns the `stellar` binary, it works on machines where the Stellar CLI is not
+installed — useful for previewing command construction in CI or on a fresh
+checkout.
+
+Milestone arguments passed to `init` (e.g. `--milestones "1000,2000"`) are
+encoded to Soroban `ScVal` natively by the CLI, matching the contract's
+`Vec<Milestone>` layout — no `stellar` CLI conversion step is involved.
+
 `--json` takes priority over `--human-readable` when both are passed.
+
+#### Network Passphrase Verification
+
+Before any command runs, the CLI calls the configured RPC endpoint's `getNetwork`
+method and compares the returned `passphrase` against `--network-passphrase`
+(or `STELLAR_NETWORK_PASSPHRASE`). If they differ, the command fails early with
+an error naming both values, so a mismatched `--rpc-url` (e.g. mainnet RPC with a
+testnet passphrase) is caught immediately instead of surfacing as a confusing
+downstream failure. This check is skipped under `--dry-run`.
 
 #### Shell Completions
 
@@ -653,11 +696,13 @@ Supported shells: `bash`, `zsh`, `fish`, `elvish`, `powershell`.
 - Full state machine — happy path, dispute resolution, and cancellation paths
 - Integration test suite — 41/41 passing in the Soroban sandbox
 - Full CLI — all 8 commands wired end-to-end with JSON, dry-run, and human-readable output modes
+- Native ScVal encoding — scalar arguments and the `Vec<Milestone>` argument to `init` are built directly in Rust
 - Deployed live on Stellar testnet — `init` and `status` verified against the live contract
 - Frontend dashboard — 5 pages, 28 components, 12 custom hooks, animated particle network background
 - Wallet connect — Freighter wallet integration with connection states
-- Event feed — real-time on-chain event history per agreement
+- Event feed — real-time on-chain event history per agreement (limited to the last ~100k ledgers, ~6 days, that RPC providers retain; full history awaits an event-indexing service, #496)
 - Shell completions — bash, zsh, fish, elvish, powershell
+- Native strkey codec — `G...`/`S...`/`C...` Stellar address encode/decode with CRC16 checksum validation (`cli/trellis_cli/src/strkey.rs`)
 
 ### 🚧 Open for Contribution
 
