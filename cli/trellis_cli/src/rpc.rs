@@ -1,5 +1,7 @@
 use crate::config::Config;
+use crate::commands::ContractResult;
 use governor::{Quota, RateLimiter};
+use std::io::Write;
 use std::num::NonZeroU32;
 use std::sync::OnceLock;
 
@@ -56,6 +58,266 @@ pub(crate) fn stellar_bin() -> String {
         }
     }
     "stellar".to_string()
+}
+
+/// Decode a base64-encoded Soroban `ScVal` XDR result into the CLI's
+/// internal `ContractResult` representation.
+///
+/// This is the native replacement for shelling out to `stellar contract
+/// invoke` and re-printing its stdout: callers that already have a raw XDR
+/// `ScVal` (e.g. from `simulateTransaction`) can decode it directly into the
+/// same shape `render_json` / `render_human` consume.
+///
+/// The decoder understands the two result shapes produced by the Trellis
+/// contract's read-only queries:
+///
+/// * `get_agreement` → a `ScVal::Map` with fields `id`, `payer`, `payee`,
+///   `amount`, `status`, `milestone_count`.
+/// * `get_milestone` → a `ScVal::Map` with fields `agreement_id`, `index`,
+///   `amount`, `status`, `released`.
+///
+/// Returns `Err` with a human-readable message when the XDR is malformed or
+/// the top-level value is not a map (so callers can surface a clear error
+/// instead of silently printing garbage).
+pub fn decode_scval_result(xdr_base64: &str) -> Result<ContractResult, String> {
+    let raw = base64_decode(xdr_base64)
+        .map_err(|e| format!("invalid base64 in ScVal result: {e}"))?;
+    let val = parse_scval(&raw)
+        .map_err(|e| format!("failed to parse ScVal XDR: {e}"))?;
+    scval_to_contract_result(&val)
+}
+
+/// Minimal base64 decoder (standard alphabet, `=` padding) so the CLI does
+/// not need an extra dependency just for result decoding.
+fn base64_decode(input: &str) -> Result<Vec<u8>, String> {
+    fn val(c: u8) -> Option<u8> {
+        match c {
+            b'A'..=b'Z' => Some(c - b'A'),
+            b'a'..=b'z' => Some(c - b'a' + 26),
+            b'0'..=b'9' => Some(c - b'0' + 52),
+            b'+' => Some(62),
+            b'/' => Some(63),
+            _ => None,
+        }
+    }
+    let bytes: Vec<u8> = input.bytes().filter(|b| !b.is_ascii_whitespace()).collect();
+    if bytes.len() % 4 != 0 {
+        return Err("length is not a multiple of 4".to_string());
+    }
+    let mut out = Vec::with_capacity(bytes.len() / 4 * 3);
+    for chunk in bytes.chunks(4) {
+        let pad = chunk.iter().filter(|&&b| b == b'=').count();
+        if pad > 2 {
+            return Err("too much padding".to_string());
+        }
+        let mut n: u32 = 0;
+        for (i, &b) in chunk.iter().enumerate() {
+            let v = if b == b'=' {
+                0
+            } else {
+                val(b).ok_or_else(|| format!("invalid base64 byte 0x{b:02x} at index {i}"))?
+            };
+            n = (n << 6) | v as u32;
+        }
+        out.push((n >> 16) as u8);
+        if pad < 2 {
+            out.push((n >> 8) as u8);
+        }
+        if pad < 1 {
+            out.push(n as u8);
+        }
+    }
+    Ok(out)
+}
+
+/// A parsed subset of the Soroban `ScVal` union — just enough to represent
+/// the values returned by `get_agreement` / `get_milestone`.
+#[derive(Debug, Clone, PartialEq)]
+enum ScVal {
+    Void,
+    Bool(bool),
+    U32(u32),
+    I32(i32),
+    U64(u64),
+    I64(i64),
+    U128(u128),
+    I128(i128),
+    Symbol(String),
+    String(String),
+    Bytes(Vec<u8>),
+    Address(String),
+    Map(Vec<(ScVal, ScVal)>),
+    Vec(Vec<ScVal>),
+}
+
+/// Parse a raw `ScVal` XDR blob into the local `ScVal` enum.
+///
+/// This is a deliberately small reader: it walks the XDR discriminant and
+/// payload for the variants the Trellis contract actually returns. Unknown
+/// discriminants produce an error rather than a silent mis-decode.
+fn parse_scval(bytes: &[u8]) -> Result<ScVal, String> {
+    let mut cur = std::io::Cursor::new(bytes);
+    read_scval(&mut cur)
+}
+
+fn read_u32(cur: &mut std::io::Cursor<&[u8]>) -> Result<u32, String> {
+    use std::io::Read;
+    let mut buf = [0u8; 4];
+    cur.read_exact(&mut buf)
+        .map_err(|e| format!("unexpected end of XDR: {e}"))?;
+    Ok(u32::from_be_bytes(buf))
+}
+
+fn read_u64(cur: &mut std::io::Cursor<&[u8]>) -> Result<u64, String> {
+    use std::io::Read;
+    let mut buf = [0u8; 8];
+    cur.read_exact(&mut buf)
+        .map_err(|e| format!("unexpected end of XDR: {e}"))?;
+    Ok(u64::from_be_bytes(buf))
+}
+
+fn read_scval(cur: &mut std::io::Cursor<&[u8]>) -> Result<ScVal, String> {
+    let disc = read_u32(cur)?;
+    match disc {
+        0 => Ok(ScVal::Void),
+        1 => Ok(ScVal::Bool(read_u32(cur)? != 0)),
+        3 => Ok(ScVal::I32(read_u32(cur)? as i32)),
+        4 => Ok(ScVal::U32(read_u32(cur)?)),
+        5 => Ok(ScVal::I64(read_u64(cur)? as i64)),
+        6 => Ok(ScVal::U64(read_u64(cur)?)),
+        10 => {
+            let len = read_u32(cur)? as usize;
+            let mut buf = vec![0u8; len];
+            use std::io::Read;
+            cur.read_exact(&mut buf)
+                .map_err(|e| format!("unexpected end of XDR: {e}"))?;
+            Ok(ScVal::Bytes(buf))
+        }
+        14 => {
+            let len = read_u32(cur)? as usize;
+            let mut buf = vec![0u8; len];
+            use std::io::Read;
+            cur.read_exact(&mut buf)
+                .map_err(|e| format!("unexpected end of XDR: {e}"))?;
+            Ok(ScVal::String(String::from_utf8_lossy(&buf).into_owned()))
+        }
+        15 => {
+            let len = read_u32(cur)? as usize;
+            let mut buf = vec![0u8; len];
+            use std::io::Read;
+            cur.read_exact(&mut buf)
+                .map_err(|e| format!("unexpected end of XDR: {e}"))?;
+            Ok(ScVal::Symbol(String::from_utf8_lossy(&buf).into_owned()))
+        }
+        16 => {
+            // ScVal::Address — the payload is a ScAddress union. We only
+            // need a printable form; the contract's read-only queries return
+            // account/contract addresses encoded as StrKey in the CLI's
+            // existing output, so we render the raw XDR bytes as hex here
+            // and let callers that need StrKey re-encode.
+            let addr_type = read_u32(cur)?;
+            match addr_type {
+                0 => {
+                    // SC_ADDRESS_TYPE_ACCOUNT: PublicKey union, Ed25519 = 0.
+                    let pk_type = read_u32(cur)?;
+                    if pk_type != 0 {
+                        return Err(format!("unsupported PublicKey type {pk_type}"));
+                    }
+                    let mut buf = [0u8; 32];
+                    use std::io::Read;
+                    cur.read_exact(&mut buf)
+                        .map_err(|e| format!("unexpected end of XDR: {e}"))?;
+                    Ok(ScVal::Address(hex_encode(&buf)))
+                }
+                1 => {
+                    // SC_ADDRESS_TYPE_CONTRACT: 32-byte hash.
+                    let mut buf = [0u8; 32];
+                    use std::io::Read;
+                    cur.read_exact(&mut buf)
+                        .map_err(|e| format!("unexpected end of XDR: {e}"))?;
+                    Ok(ScVal::Address(hex_encode(&buf)))
+                }
+                other => Err(format!("unsupported ScAddress type {other}")),
+            }
+        }
+        17 => {
+            // ScVal::Vec
+            let len = read_u32(cur)? as usize;
+            let mut items = Vec::with_capacity(len);
+            for _ in 0..len {
+                items.push(read_scval(cur)?);
+            }
+            Ok(ScVal::Vec(items))
+        }
+        18 => {
+            // ScVal::Map
+            let len = read_u32(cur)? as usize;
+            let mut entries = Vec::with_capacity(len);
+            for _ in 0..len {
+                let k = read_scval(cur)?;
+                let v = read_scval(cur)?;
+                entries.push((k, v));
+            }
+            Ok(ScVal::Map(entries))
+        }
+        other => Err(format!("unsupported ScVal discriminant {other}")),
+    }
+}
+
+fn hex_encode(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// Convert a decoded `ScVal::Map` into the CLI's `ContractResult` shape.
+fn scval_to_contract_result(val: &ScVal) -> Result<ContractResult, String> {
+    let map = match val {
+        ScVal::Map(m) => m,
+        other => {
+            return Err(format!(
+                "expected ScVal::Map at top level, got {other:?}"
+            ))
+        }
+    };
+    let mut result = ContractResult::default();
+    for (k, v) in map {
+        let key = match k {
+            ScVal::Symbol(s) | ScVal::String(s) => s.clone(),
+            other => return Err(format!("non-string map key: {other:?}")),
+        };
+        result.fields.insert(key, scval_to_json(v));
+    }
+    Ok(result)
+}
+
+/// Render a decoded `ScVal` as a `serde_json::Value` so it slots directly
+/// into the existing `render_json` output.
+fn scval_to_json(val: &ScVal) -> serde_json::Value {
+    use serde_json::Value;
+    match val {
+        ScVal::Void => Value::Null,
+        ScVal::Bool(b) => Value::Bool(*b),
+        ScVal::U32(n) => Value::from(*n),
+        ScVal::I32(n) => Value::from(*n),
+        ScVal::U64(n) => Value::from(*n),
+        ScVal::I64(n) => Value::from(*n),
+        ScVal::U128(n) => Value::from(n.to_string()),
+        ScVal::I128(n) => Value::from(n.to_string()),
+        ScVal::Symbol(s) | ScVal::String(s) => Value::from(s.clone()),
+        ScVal::Bytes(b) => Value::from(hex_encode(b)),
+        ScVal::Address(a) => Value::from(a.clone()),
+        ScVal::Vec(items) => Value::Array(items.iter().map(scval_to_json).collect()),
+        ScVal::Map(entries) => {
+            let mut obj = serde_json::Map::new();
+            for (k, v) in entries {
+                let key = match k {
+                    ScVal::Symbol(s) | ScVal::String(s) => s.clone(),
+                    other => format!("{other:?}"),
+                };
+                obj.insert(key, scval_to_json(v));
+            }
+            Value::Object(obj)
+        }
+    }
 }
 
 /// Native Soroban RPC client that talks directly to the Soroban JSON-RPC endpoint.
@@ -153,7 +415,169 @@ impl RpcClient {
         Self::build_cmd_args(config, fn_name, args).1
     }
 
-    /// Invoke via stellar CLI with automatic retry on transient RPC failures.
+    /// Send a signed transaction envelope via `sendTransaction` JSON-RPC,
+    /// then poll `getTransaction` on an interval until `SUCCESS`, `FAILED`, or timeout.
+    ///
+    /// Reuses the CLI's existing retry/backoff conventions for the polling loop.
+    pub fn send_and_poll(config: &Config, envelope_xdr: &str, quiet: bool) -> InvokeOutput {
+        let max_retries: u32 = std::env::var("STELLAR_RPC_RETRIES")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(3);
+
+        const BACKOFF_MS: [u64; 4] = [1_000, 2_000, 4_000, 8_000];
+        let mut attempt = 0u32;
+
+        let client = reqwest::blocking::Client::new();
+        let rpc_url = &config.rpc_url;
+
+        // 1. Send transaction
+        let send_body = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "sendTransaction",
+            "params": {
+                "transaction": envelope_xdr
+            }
+        });
+
+        let send_res = loop {
+            apply_rate_limit();
+            match client.post(rpc_url).json(&send_body).send() {
+                Ok(resp) => match resp.json::<serde_json::Value>() {
+                    Ok(json) => {
+                        if let Some(err) = json.get("error") {
+                            let err_msg = err.get("message").and_then(|v| v.as_str()).unwrap_or("unknown RPC error");
+                            if attempt >= max_retries {
+                                return InvokeOutput {
+                                    stdout: String::new(),
+                                    stderr: format!("sendTransaction failed: {}", err_msg),
+                                    success: false,
+                                    command_debug: format!("sendTransaction({})", rpc_url),
+                                };
+                            }
+                        } else if let Some(result) = json.get("result") {
+                            let status = result.get("status").and_then(|v| v.as_str()).unwrap_or("");
+                            if status == "PENDING" || status == "SUCCESS" {
+                                if let Some(hash) = result.get("hash").and_then(|v| v.as_str()) {
+                                    break hash.to_string();
+                                }
+                            }
+                            if status == "ERROR" || status == "FAILED" {
+                                let error_result = result.get("errorResult").map(|v| v.to_string()).unwrap_or_else(|| "transaction failed".to_string());
+                                return InvokeOutput {
+                                    stdout: String::new(),
+                                    stderr: format!("Transaction failed: {}", error_result),
+                                    success: false,
+                                    command_debug: format!("sendTransaction({})", rpc_url),
+                                };
+                            }
+                            if let Some(hash) = result.get("hash").and_then(|v| v.as_str()) {
+                                break hash.to_string();
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        if attempt >= max_retries {
+                            return InvokeOutput {
+                                stdout: String::new(),
+                                stderr: format!("Failed to parse sendTransaction response: {}", e),
+                                success: false,
+                                command_debug: format!("sendTransaction({})", rpc_url),
+                            };
+                        }
+                    }
+                },
+                Err(e) => {
+                    if attempt >= max_retries {
+                        return InvokeOutput {
+                            stdout: String::new(),
+                            stderr: format!("sendTransaction network error: {}", e),
+                            success: false,
+                            command_debug: format!("sendTransaction({})", rpc_url),
+                        };
+                    }
+                }
+            }
+
+            let idx = (attempt as usize).min(BACKOFF_MS.len() - 1);
+            let base_ms = BACKOFF_MS[idx];
+            let jitter = (std::time::Instant::now().elapsed().subsec_nanos() % 200) as u64;
+            let sleep_duration = std::time::Duration::from_millis(base_ms + jitter);
+
+            if !quiet {
+                eprintln!("⚠️  sendTransaction transient error (attempt {}/{}), retrying in {}ms...", attempt + 1, max_retries, base_ms + jitter);
+            }
+
+            std::thread::sleep(sleep_duration);
+            attempt += 1;
+        };
+
+        // 2. Poll getTransaction until terminal status or timeout
+        let max_polls: u32 = std::env::var("STELLAR_RPC_POLL_RETRIES")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(30);
+
+        let mut poll_attempt = 0u32;
+        loop {
+            apply_rate_limit();
+            let poll_body = serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "getTransaction",
+                "params": {
+                    "hash": send_res
+                }
+            });
+
+            match client.post(rpc_url).json(&poll_body).send() {
+                Ok(resp) => match resp.json::<serde_json::Value>() {
+                    Ok(json) => {
+                        if let Some(result) = json.get("result") {
+                            let status = result.get("status").and_then(|v| v.as_str()).unwrap_or("");
+                            match status {
+                                "SUCCESS" => {
+                                    return InvokeOutput {
+                                        stdout: serde_json::to_string_pretty(&result).unwrap_or_default(),
+                                        stderr: String::new(),
+                                        success: true,
+                                        command_debug: format!("getTransaction({})", send_res),
+                                    };
+                                }
+                                "FAILED" | "ERROR" => {
+                                    let err_res = result.get("errorResult").map(|v| v.to_string()).unwrap_or_default();
+                                    return InvokeOutput {
+                                        stdout: String::new(),
+                                        stderr: format!("Transaction failed on-chain: status={}, errorResult={}", status, err_res),
+                                        success: false,
+                                        command_debug: format!("getTransaction({})", send_res),
+                                    };
+                                }
+                                _ => {
+                                    // PENDING or other non-terminal status
+                                }
+                            }
+                        }
+                    }
+                    Err(_) => {}
+                },
+                Err(_) => {}
+            }
+
+            if poll_attempt >= max_polls {
+                return InvokeOutput {
+                    stdout: String::new(),
+                    stderr: format!("Transaction polling timed out after {} attempts (hash: {})", max_polls, send_res),
+                    success: false,
+                    command_debug: format!("getTransaction({})", send_res),
+                };
+            }
+
+            std::thread::sleep(std::time::Duration::from_secs(1));
+            poll_attempt += 1;
+        }
+    }
     ///
     /// Backoff schedule (before jitter): 1 s, 2 s, 4 s, 8 s (capped).
     /// Jitter adds up to 200 ms derived from the current system clock so
@@ -307,6 +731,39 @@ fn hex_preview(bytes: &[u8]) -> String {
         out.push_str(&format!(" … (+{} more)", bytes.len() - MAX));
     }
     out
+}
+
+/// Extract the value of a top-level string field from a JSON object without
+/// pulling in a JSON dependency.
+///
+/// This is intentionally minimal: it looks for `"<field>"` followed by a
+/// colon and a double-quoted string, and returns the unescaped contents. It is
+/// only used for the small, well-formed `getNetwork` response.
+fn extract_json_string_field(json: &str, field: &str) -> Option<String> {
+    let needle = format!("\"{field}\"");
+    let start = json.find(&needle)? + needle.len();
+    let after = &json[start..];
+    let colon = after.find(':')?;
+    let rest = after[colon + 1..].trim_start();
+    let mut chars = rest.chars();
+    if chars.next()? != '"' {
+        return None;
+    }
+    let mut out = String::new();
+    let mut escaped = false;
+    for c in chars {
+        if escaped {
+            out.push(c);
+            escaped = false;
+        } else if c == '\\' {
+            escaped = true;
+        } else if c == '"' {
+            return Some(out);
+        } else {
+            out.push(c);
+        }
+    }
+    None
 }
 
 /// Return true when stderr content indicates a transient, retriable RPC error.
@@ -600,5 +1057,38 @@ mod tests {
             "dry-run leaked the seed: {preview}"
         );
         assert!(preview.contains("<redacted>"));
+    }
+
+    // --- network passphrase verification ---
+
+    #[test]
+    fn extract_json_string_field_reads_passphrase() {
+        let json = r#"{"jsonrpc":"2.0","id":1,"result":{"passphrase":"Test SDF Network ; September 2015","protocolVersion":20}}"#;
+        assert_eq!(
+            extract_json_string_field(json, "passphrase").as_deref(),
+            Some("Test SDF Network ; September 2015")
+        );
+    }
+
+    #[test]
+    fn extract_json_string_field_handles_escapes() {
+        let json = r#"{"passphrase":"a \"quoted\" value"}"#;
+        assert_eq!(
+            extract_json_string_field(json, "passphrase").as_deref(),
+            Some("a \"quoted\" value")
+        );
+    }
+
+    #[test]
+    fn extract_json_string_field_missing_returns_none() {
+        assert_eq!(extract_json_string_field(r#"{"result":{}}"#, "passphrase"), None);
+    }
+
+    #[test]
+    fn verify_network_passphrase_rejects_unsupported_scheme() {
+        let mut cfg = cfg_with_source("alice");
+        cfg.rpc_url = "https://soroban-testnet.stellar.org".to_string();
+        let err = RpcClient::verify_network_passphrase(&cfg).unwrap_err();
+        assert!(err.contains("unsupported RPC URL scheme"), "got: {err}");
     }
 }

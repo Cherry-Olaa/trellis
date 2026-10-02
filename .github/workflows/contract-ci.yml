@@ -116,6 +116,17 @@ jobs:
       - name: Cache cargo registry and build artifacts
         uses: Swatinem/rust-cache@v2
 
+      # Verify the workspace lockfile is consistent with Cargo.toml. This
+      # prevents accidental dependency changes from being merged without
+      # updating Cargo.lock (reproducible builds). CI will fail if the
+      # lockfile is out of date.
+      - name: Verify Cargo.lock is up-to-date
+        run: |
+          set -euo pipefail
+          echo "::group::Cargo.lock verification"
+          cargo check --locked --workspace
+          echo "::endgroup::"
+
       - name: Check formatting
         run: cargo fmt --all -- --check
 

@@ -2,8 +2,8 @@ import { useEffect, useState } from 'react'
 import { Link, useLocation } from 'react-router-dom'
 import { useTheme } from '../context/ThemeContext'
 import { CONTRACT_ID } from '../lib/config'
-import { ACTIVE_NETWORK, explorerBaseUrl, networkLabel } from '../lib/explorer'
 import { ExplorerLink } from './ExplorerLink'
+import { NetworkStatus } from './NetworkStatus'
 import WalletConnect from './WalletConnect'
 import { WalletErrorBoundary } from './WalletErrorBoundary'
 import MoonIcon from './icons/MoonIcon'
@@ -58,23 +58,7 @@ function Navbar() {
       </div>
 
       <div className="flex flex-wrap items-center justify-end gap-2 sm:gap-4">
-        <a
-          href={explorerBaseUrl()}
-          target="_blank"
-          rel="noopener noreferrer"
-          title={`Browse the Stellar ${networkLabel()} on Stellar Expert`}
-          aria-label={`Network status: ${networkLabel(ACTIVE_NETWORK)} — view on Stellar Expert`}
-          role="status"
-          aria-live="polite"
-          className="inline-flex items-center gap-1.5 rounded-full border border-cyan-400/30 px-3 py-1 text-xs font-medium text-cyan-400 transition-colors hover:border-cyan-400/60 hover:bg-cyan-400/10"
-        >
-          <span
-            className="h-1.5 w-1.5 rounded-full bg-cyan-400"
-            aria-hidden="true"
-            title={`Connected to ${networkLabel(ACTIVE_NETWORK)}`}
-          />
-          <span className="hidden sm:inline">{networkLabel(ACTIVE_NETWORK)}</span>
-        </a>
+        <NetworkStatus />
         <ExplorerLink
           type="contract"
           value={CONTRACT_ID}
