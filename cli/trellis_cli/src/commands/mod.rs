@@ -931,14 +931,30 @@ fn run_milestone_status(
 ) -> Result<(), String> {
     validate_agreement_id(&agreement_id).unwrap_or_else(|e| fail_validation(&e));
 
-    let args = vec![
-        "--agreement-id".to_string(),
-        agreement_id,
-        "--milestone-id".to_string(),
-        milestone_id.to_string(),
-    ];
+    let args = milestone_status_args(&agreement_id, milestone_id);
 
     execute(config, "get_milestone", &args, opts)
+}
+
+/// Build the `stellar contract invoke` argv for the `milestone-status` command.
+///
+/// Split out from [`run_milestone_status`] so the argument vector can be
+/// unit-tested without spawning the `stellar` binary.
+///
+/// The agreement ID is forwarded **verbatim** — deliberately without any
+/// surrounding quote characters (#404). `Command::args` passes each element as
+/// one argv entry, so shell quoting is neither needed nor applied; adding
+/// literal `"` characters around the hex string would send the contract a
+/// malformed value (e.g. `"0101…01"`) and every invocation would fail to
+/// deserialize its `BytesN<32>` argument. Every other command passes the bare
+/// ID for the same reason.
+fn milestone_status_args(agreement_id: &str, milestone_id: u32) -> Vec<String> {
+    vec![
+        "--agreement-id".to_string(),
+        agreement_id.to_string(),
+        "--milestone-id".to_string(),
+        milestone_id.to_string(),
+    ]
 }
 
 // ---------------------------------------------------------------------------
@@ -1805,6 +1821,46 @@ mod tests {
             success: false,
             command_debug: "stellar contract invoke --id CAABC -- boom".to_string(),
         }
+    }
+
+    // --- milestone_status_args (#404) ---
+
+    /// Regression test for #404: `milestone-status` must forward the agreement
+    /// ID verbatim, with no literal `"` characters wrapped around it. The old
+    /// `format!("\"{}\"", agreement_id)` built the argv value `"01…01"`, which
+    /// the contract could not deserialize into a `BytesN<32>`.
+    #[test]
+    fn milestone_status_args_pass_bare_agreement_id() {
+        let id = "0101010101010101010101010101010101010101010101010101010101010101";
+        let args = milestone_status_args(id, 3);
+
+        assert_eq!(
+            args,
+            vec![
+                "--agreement-id".to_string(),
+                id.to_string(),
+                "--milestone-id".to_string(),
+                "3".to_string(),
+            ]
+        );
+        assert_eq!(args[1], id, "agreement ID must be passed verbatim");
+        assert!(
+            !args.iter().any(|a| a.contains('"')),
+            "no argv entry may contain literal quote characters, got {args:?}"
+        );
+    }
+
+    /// Adjacent case: the flag/value layout and the decimal milestone ID must
+    /// not regress while the quoting bug is fixed.
+    #[test]
+    fn milestone_status_args_keep_flag_order_and_decimal_milestone_id() {
+        let args = milestone_status_args("ab", 12);
+
+        assert_eq!(args.len(), 4, "expected one flag/value pair per argument");
+        assert_eq!(args[0], "--agreement-id");
+        assert_eq!(args[1], "ab");
+        assert_eq!(args[2], "--milestone-id");
+        assert_eq!(args[3], "12");
     }
 
     // --- json_envelope ---
