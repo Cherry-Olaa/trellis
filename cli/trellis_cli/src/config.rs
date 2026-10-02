@@ -107,7 +107,13 @@ pub fn validate_contract_id(id: &str) -> Result<(), String> {
 /// (`http://localhost:8000`) still works; any other scheme (`ftp`, `file`,
 /// `ws`, …) and any URL with an empty host is rejected here with a clear
 /// message.
-pub fn validate_rpc_url(raw: &str) -> Result<(), String> {
+///
+/// Cleartext `http://` to a non-loopback host is refused by default to
+/// prevent a compromised `.env` from silently redirecting traffic to an
+/// unauthenticated endpoint. Pass `unsafe_rpc = true` to downgrade the hard
+/// error to a printed warning (useful for development devnets). This mirrors
+/// the `--unsafe-rpc` CLI flag (#156).
+pub fn validate_rpc_url(raw: &str, unsafe_rpc: bool) -> Result<Option<String>, String> {
     let parsed =
         url::Url::parse(raw).map_err(|e| format!("RPC URL {raw:?} is not a valid URL: {e}"))?;
 
@@ -124,7 +130,24 @@ pub fn validate_rpc_url(raw: &str) -> Result<(), String> {
         return Err(format!("RPC URL {raw:?} is missing a host"));
     }
 
-    Ok(())
+    // Guard against cleartext HTTP to non-loopback hosts (#156).
+    if parsed.scheme() == "http" {
+        let host = parsed.host_str().unwrap_or("");
+        let is_loopback = matches!(host, "localhost" | "127.0.0.1" | "::1");
+        if !is_loopback {
+            let msg = format!(
+                "Warning: RPC URL {raw:?} uses cleartext HTTP to a non-loopback host. \
+                 Traffic may be intercepted. Use https:// or pass --unsafe-rpc to suppress this error."
+            );
+            if unsafe_rpc {
+                return Ok(Some(msg));
+            } else {
+                return Err(msg);
+            }
+        }
+    }
+
+    Ok(None)
 }
 
 impl Config {
@@ -145,7 +168,7 @@ impl Config {
             _ => Network::Testnet,
         };
 
-        Self::resolve(network, None, None)
+        Self::resolve(network, None, None, None)
     }
 
     /// Resolve configuration from a `--network` preset plus optional CLI
@@ -187,8 +210,19 @@ impl Config {
         let contract_id = std::env::var("TRELLIS_CONTRACT_ID")
             .unwrap_or_else(|_| "UNSET_CONTRACT_ID".to_string());
 
-        let source_key =
-            std::env::var("TRELLIS_SOURCE_KEY").unwrap_or_else(|_| "UNSET_SOURCE_KEY".to_string());
+        // Source key priority: --source-key-file CLI flag >
+        // TRELLIS_SOURCE_KEY_FILE env var > TRELLIS_SOURCE_KEY env var.
+        // Reading from a file keeps raw `S…` seeds out of argv and out of
+        // the exported-env-var namespace where they leak into
+        // `/proc/<pid>/environ` (#240).
+        let source_key = if let Some(path) = cli_source_key_file {
+            read_source_key_file(&path)?
+        } else if let Ok(path) = std::env::var("TRELLIS_SOURCE_KEY_FILE") {
+            read_source_key_file(&path)?
+        } else {
+            std::env::var("TRELLIS_SOURCE_KEY")
+                .unwrap_or_else(|_| "UNSET_SOURCE_KEY".to_string())
+        };
 
         Ok(Config {
             rpc_url,
@@ -216,7 +250,7 @@ impl Config {
             errors.push("TRELLIS_SOURCE_KEY".to_string());
         }
 
-        if let Err(e) = validate_rpc_url(&self.rpc_url) {
+        if let Err(e) = validate_rpc_url(&self.rpc_url, false) {
             errors.push(e);
         }
 
@@ -420,14 +454,14 @@ mod tests {
 
     #[test]
     fn rpc_url_accepts_https_and_http_localhost() {
-        assert!(validate_rpc_url("https://soroban-testnet.stellar.org").is_ok());
-        assert!(validate_rpc_url("http://localhost:8000/soroban/rpc").is_ok());
-        assert!(validate_rpc_url("http://127.0.0.1:8000").is_ok());
+        assert!(validate_rpc_url("https://soroban-testnet.stellar.org", false).is_ok());
+        assert!(validate_rpc_url("http://localhost:8000/soroban/rpc", false).is_ok());
+        assert!(validate_rpc_url("http://127.0.0.1:8000", false).is_ok());
     }
 
     #[test]
     fn rpc_url_rejects_scheme_typo() {
-        let err = validate_rpc_url("httsp://soroban-testnet.stellar.org").unwrap_err();
+        let err = validate_rpc_url("httsp://soroban-testnet.stellar.org", false).unwrap_err();
         assert!(
             err.contains("scheme") || err.contains("valid URL"),
             "got: {err}"
@@ -436,20 +470,20 @@ mod tests {
 
     #[test]
     fn rpc_url_rejects_missing_scheme() {
-        assert!(validate_rpc_url("soroban-testnet.stellar.org").is_err());
+        assert!(validate_rpc_url("soroban-testnet.stellar.org", false).is_err());
     }
 
     #[test]
     fn rpc_url_rejects_non_http_scheme() {
-        assert!(validate_rpc_url("ftp://example.com").is_err());
-        assert!(validate_rpc_url("ws://example.com").is_err());
-        assert!(validate_rpc_url("file:///etc/passwd").is_err());
+        assert!(validate_rpc_url("ftp://example.com", false).is_err());
+        assert!(validate_rpc_url("ws://example.com", false).is_err());
+        assert!(validate_rpc_url("file:///etc/passwd", false).is_err());
     }
 
     #[test]
     fn rpc_url_rejects_empty_host() {
-        assert!(validate_rpc_url("https://").is_err());
-        assert!(validate_rpc_url("http://").is_err());
+        assert!(validate_rpc_url("https://", false).is_err());
+        assert!(validate_rpc_url("http://", false).is_err());
     }
 
     #[test]
