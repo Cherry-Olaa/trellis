@@ -43,46 +43,16 @@ use soroban_sdk::{testutils::Address as _, token, Address, BytesN, Env, Vec};
 
 use crate::{
     errors::TrellisError,
+    test_utils::{agreement_id, milestones_from_amounts, setup_mocked},
     types::{EscrowStatus, Milestone},
-    TrellisContract, TrellisContractClient,
+    TrellisContractClient,
 };
 
 // ---------------------------------------------------------------------------
-// Helpers (kept local, mirroring test.rs / test_properties.rs)
+// Helpers local to this suite — `agreement_id`, `setup_mocked` and
+// `milestones_from_amounts` come from `crate::test_utils` so all three test
+// suites share one implementation (#403).
 // ---------------------------------------------------------------------------
-
-fn agreement_id(env: &Env, seed: u8) -> BytesN<32> {
-    BytesN::from_array(env, &[seed; 32])
-}
-
-fn setup() -> (
-    Env,
-    Address,
-    Address,
-    Address,
-    Address,
-    TrellisContractClient<'static>,
-) {
-    let env = Env::default();
-    // Auth is mocked so these tests isolate *input handling*: we want to reach
-    // the index / state / id checks, not stop at a signature check.
-    env.mock_all_auths();
-
-    let payer = Address::generate(&env);
-    let payee = Address::generate(&env);
-    let dispute_resolver = Address::generate(&env);
-
-    let token_admin = Address::generate(&env);
-    let token_address = env
-        .register_stellar_asset_contract_v2(token_admin.clone())
-        .address();
-    token::StellarAssetClient::new(&env, &token_address).mint(&payer, &1_000_000_000);
-
-    let contract_id = env.register(TrellisContract, ());
-    let client = TrellisContractClient::new(&env, &contract_id);
-
-    (env, payer, payee, dispute_resolver, token_address, client)
-}
 
 /// Build a `Vec<Milestone>` of `n` Pending milestones worth 1_000 each.
 fn pending_milestones(env: &Env, n: u32) -> Vec<Milestone> {
@@ -90,20 +60,6 @@ fn pending_milestones(env: &Env, n: u32) -> Vec<Milestone> {
     for _ in 0..n {
         v.push_back(Milestone {
             amount: 1_000,
-            status: EscrowStatus::Pending,
-            proof_uri: None,
-        });
-    }
-    v
-}
-
-/// Build a `Vec<Milestone>` from explicit amounts (used for the `init` edge
-/// cases that need zero / negative values).
-fn milestones_from_amounts(env: &Env, amounts: &[i128]) -> Vec<Milestone> {
-    let mut v: Vec<Milestone> = Vec::new(env);
-    for &amount in amounts.iter() {
-        v.push_back(Milestone {
-            amount,
             status: EscrowStatus::Pending,
             proof_uri: None,
         });
@@ -140,7 +96,7 @@ fn init_agreement(
 
 #[test]
 fn unknown_agreement_id_never_panics() {
-    let (env, payer, payee, _resolver, _token, client) = setup();
+    let (env, payer, payee, _resolver, _token, client) = setup_mocked();
     let missing = agreement_id(&env, 200);
 
     // Every entrypoint that reads an agreement must surface AgreementNotFound.
@@ -184,7 +140,7 @@ fn unknown_agreement_id_never_panics() {
 
 #[test]
 fn out_of_range_milestone_index_never_panics() {
-    let (env, payer, payee, resolver, token, client) = setup();
+    let (env, payer, payee, resolver, token, client) = setup_mocked();
     let id = init_agreement(&client, &env, 1, &payer, &payee, &token, &resolver, 1);
 
     // Index 999 is far past the single milestone — the `Vec::get(..).ok_or(..)`
@@ -219,7 +175,7 @@ fn out_of_range_milestone_index_never_panics() {
 
 #[test]
 fn u32_max_milestone_index_never_panics() {
-    let (env, payer, payee, resolver, token, client) = setup();
+    let (env, payer, payee, resolver, token, client) = setup_mocked();
     let id = init_agreement(&client, &env, 2, &payer, &payee, &token, &resolver, 3);
 
     assert_eq!(
@@ -234,7 +190,7 @@ fn u32_max_milestone_index_never_panics() {
 
 #[test]
 fn illegal_state_transitions_never_panic() {
-    let (env, payer, payee, resolver, token, client) = setup();
+    let (env, payer, payee, resolver, token, client) = setup_mocked();
     let id = init_agreement(&client, &env, 3, &payer, &payee, &token, &resolver, 1);
 
     // Milestone 0 is Pending. Submitting / approving before funding, or
@@ -266,7 +222,7 @@ fn illegal_state_transitions_never_panic() {
 
 #[test]
 fn raise_dispute_with_non_party_caller_never_panics() {
-    let (env, payer, payee, resolver, token, client) = setup();
+    let (env, payer, payee, resolver, token, client) = setup_mocked();
     let id = init_agreement(&client, &env, 4, &payer, &payee, &token, &resolver, 1);
     client.lock_funds(&id, &0);
 
@@ -279,7 +235,7 @@ fn raise_dispute_with_non_party_caller_never_panics() {
 
 #[test]
 fn init_edge_cases_return_typed_errors() {
-    let (env, payer, payee, resolver, token, client) = setup();
+    let (env, payer, payee, resolver, token, client) = setup_mocked();
 
     // Empty milestone set.
     let empty: Vec<Milestone> = Vec::new(&env);
@@ -364,7 +320,7 @@ proptest! {
         milestone_id in any::<u32>(),
         seed in any::<u8>(),
     ) {
-        let (env, payer, payee, resolver, token, client) = setup();
+        let (env, payer, payee, resolver, token, client) = setup_mocked();
         let id = init_agreement(&client, &env, seed, &payer, &payee, &token, &resolver, n_milestones);
 
         assert_no_trap!(client.try_lock_funds(&id, &milestone_id), "lock_funds");
@@ -383,7 +339,7 @@ proptest! {
         seed in any::<u8>(),
         milestone_id in any::<u32>(),
     ) {
-        let (env, payer, payee, _resolver, _token, client) = setup();
+        let (env, payer, payee, _resolver, _token, client) = setup_mocked();
         let id = agreement_id(&env, seed);
 
         assert_no_trap!(client.try_lock_funds(&id, &milestone_id), "lock_funds");
@@ -402,7 +358,7 @@ proptest! {
     /// itself must be panic-free.
     #[test]
     fn fuzz_arbitrary_proof_uri_never_traps(proof in ".*") {
-        let (env, payer, payee, resolver, token, client) = setup();
+        let (env, payer, payee, resolver, token, client) = setup_mocked();
         let id = init_agreement(&client, &env, 77, &payer, &payee, &token, &resolver, 1);
         let uri = Some(soroban_sdk::String::from_str(&env, &proof));
         assert_no_trap!(client.try_submit_work(&id, &0, &uri), "submit_work");
