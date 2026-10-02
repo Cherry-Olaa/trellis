@@ -15,6 +15,7 @@ const STATUS_BADGE_COLORS: Record<EscrowStatus, string> = {
   Completed: 'bg-green-600',
   Disputed: 'bg-red-600',
   Refunded: 'bg-gray-600',
+  Cancelled: 'bg-slate-500',
 };
 
 export function getStatusBadgeColor(status: EscrowStatus): string {

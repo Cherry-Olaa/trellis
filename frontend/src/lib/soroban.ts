@@ -23,7 +23,8 @@ export type EscrowStatus =
   | 'WorkSubmitted'
   | 'Completed'
   | 'Disputed'
-  | 'Refunded';
+  | 'Refunded'
+  | 'Cancelled';
 
 export interface SorobanEvent {
   type: string;
@@ -86,7 +87,7 @@ export function isValidEventResponse(data: unknown): data is RawEventResponse {
 
 export function parseEscrowStatus(statusValue: unknown): EscrowStatus {
   if (typeof statusValue === 'string') {
-    const validStatuses: EscrowStatus[] = ['Pending', 'Funded', 'WorkSubmitted', 'Completed', 'Disputed', 'Refunded'];
+    const validStatuses: EscrowStatus[] = ['Pending', 'Funded', 'WorkSubmitted', 'Completed', 'Disputed', 'Refunded', 'Cancelled'];
     if (validStatuses.includes(statusValue as EscrowStatus)) {
       return statusValue as EscrowStatus;
     }
@@ -96,7 +97,7 @@ export function parseEscrowStatus(statusValue: unknown): EscrowStatus {
     const keys = Object.keys(statusValue);
     if (keys.length > 0 && typeof keys[0] === 'string') {
       const status = keys[0];
-      const validStatuses: EscrowStatus[] = ['Pending', 'Funded', 'WorkSubmitted', 'Completed', 'Disputed', 'Refunded'];
+      const validStatuses: EscrowStatus[] = ['Pending', 'Funded', 'WorkSubmitted', 'Completed', 'Disputed', 'Refunded', 'Cancelled'];
       if (validStatuses.includes(status as EscrowStatus)) {
         return status as EscrowStatus;
       }

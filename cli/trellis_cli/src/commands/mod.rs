@@ -549,9 +549,12 @@ fn validate_proof_uri(uri: &str) -> Result<(), String> {
     if uri.is_empty() {
         return Err("proof_uri must not be empty".to_string());
     }
-    if uri.len() > 2048 {
+    // Mirrors the contract's MAX_PROOF_URI_LEN: the contract rejects longer
+    // proofs, so catching it here avoids paying for a doomed transaction.
+    if uri.len() > crate::input::MAX_PROOF_URI_LEN {
         return Err(format!(
-            "proof_uri must not exceed 2048 characters, got {}",
+            "proof_uri must not exceed {} characters, got {}",
+            crate::input::MAX_PROOF_URI_LEN,
             uri.len()
         ));
     }
@@ -923,6 +926,11 @@ fn run_status(config: &Config, agreement_id: String, opts: &OutputOpts) -> Resul
 ///
 /// Queries a single milestone by index without fetching the full Agreement,
 /// reducing deserialization cost for agreements with many milestones.
+///
+/// The contract returns `Result<Option<Milestone>, TrellisError>`: an unknown
+/// agreement surfaces as the on-chain `AgreementNotFound` error (non-zero exit
+/// status with the decoded error code), while an out-of-range milestone id
+/// prints `null`.
 fn run_milestone_status(
     config: &Config,
     agreement_id: String,

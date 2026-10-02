@@ -28,6 +28,15 @@ use types::{Agreement, AgreementHeader, EscrowStatus, Milestone};
 
 const MAX_MILESTONES: u32 = 50;
 
+/// Maximum length, in bytes, of the `proof_uri` accepted by `submit_work`.
+///
+/// A milestone lives in persistent storage for the lifetime of its agreement,
+/// so an unbounded proof URI would let a payee permanently inflate the
+/// agreement's storage footprint (and rent) with no real cost beyond the
+/// transaction fee. 512 bytes comfortably fits an `ipfs://` CID or a long
+/// HTTPS URL, and the CLI enforces the same cap client-side.
+pub const MAX_PROOF_URI_LEN: u32 = 512;
+
 // ---------------------------------------------------------------------------
 // Contract struct
 // ---------------------------------------------------------------------------
@@ -230,10 +239,16 @@ impl TrellisContract {
     /// normalized to `None` to ensure semantic consistency — indexers pattern
     /// match on `Some(uri)` and must never see an empty string.
     ///
+    /// `proof_uri` is stored verbatim in the agreement's persistent entry, so
+    /// it is capped at [`MAX_PROOF_URI_LEN`] (512 bytes) to bound the storage
+    /// and rent a single submission can lock in for the agreement's lifetime.
+    ///
     /// # Errors
     /// - [`TrellisError::AgreementNotFound`] – unknown agreement ID.
     /// - [`TrellisError::InvalidMilestone`] – `milestone_id` out of range.
     /// - [`TrellisError::InvalidStateTransition`] – milestone not `Funded`.
+    /// - [`TrellisError::ProofUriTooLong`] – `proof_uri` exceeds
+    ///   [`MAX_PROOF_URI_LEN`] bytes.
     pub fn submit_work(
         env: Env,
         agreement_id: BytesN<32>,
@@ -251,6 +266,16 @@ impl TrellisContract {
         }
 
         let proof_uri = proof_uri.filter(|s| !s.is_empty());
+
+        // Reject oversized proofs before touching storage: the URI is written
+        // verbatim and kept for the agreement's lifetime, so an unbounded
+        // length would be a permanent storage/rent cost imposed by the payee.
+        if let Some(uri) = &proof_uri {
+            if uri.len() > MAX_PROOF_URI_LEN {
+                return Err(TrellisError::ProofUriTooLong);
+            }
+        }
+
         milestone.status = EscrowStatus::WorkSubmitted;
         milestone.proof_uri = proof_uri.clone();
         storage::write_milestone(&env, &agreement_id, milestone_id, &milestone);
@@ -553,6 +578,10 @@ impl TrellisContract {
     /// event used by [`Self::resolve_dispute`]. No tokens move here, so
     /// off-chain consumers must not treat a cancellation as a dispute ruling.
     ///
+    /// The milestone transitions to [`EscrowStatus::Cancelled`] — never
+    /// [`EscrowStatus::Refunded`], which is reserved for dispute rulings
+    /// (`resolve_dispute`) where real funds were locked and then returned.
+    ///
     /// # Errors
     /// - [`TrellisError::AgreementNotFound`] – unknown agreement ID.
     /// - [`TrellisError::InvalidMilestone`] – `milestone_id` out of range.
@@ -607,7 +636,19 @@ impl TrellisContract {
 
     /// Return the full [`Agreement`] struct for the given ID.
     ///
-    /// This is a read-only view — no auth is required and no state is modified.
+    /// This is a view call — no auth is required and no agreement data is
+    /// modified, but it is **not** free of side effects: the read goes through
+    /// `storage::read_agreement`, which renews the entry's ledger TTL whenever
+    /// the remaining lifetime has dropped below the renewal threshold, and the
+    /// caller pays the rent for that extension.  An agreement that is merely
+    /// being watched — a long dispute window, a milestone awaiting delivery —
+    /// is still in active use and must not be archived out from under its
+    /// parties, which is why the renewal happens on read rather than only on
+    /// write.  A bump-free variant was considered for callers that want a
+    /// strictly side-effect-free probe, but it would make a single careless
+    /// read (for example from an indexer polling every block) silently
+    /// responsible for the agreement's lifetime.
+    ///
     /// It exists primarily so the CLI `status` command can display the current
     /// agreement state (including per-milestone statuses) via
     /// `stellar contract invoke … -- get_agreement --agreement-id <hex>`.
@@ -706,30 +747,26 @@ impl TrellisContract {
 
     /// Return a single [`Milestone`] by its index within the agreement.
     ///
-    /// This is a read-only view — no auth required, no state modified.  It lets
-    /// callers query one milestone's current status without deserializing the
-    /// full [`Agreement`] struct, which reduces ledger read cost for agreements
-    /// with many milestones.
-    ///
-    /// Returns `None` if the agreement does not exist or `milestone_id` is out
-    /// of range — both map to the same observable absence from the caller's
-    /// perspective.
+    /// This is a view call — no auth is required and no agreement data is
+    /// modified, but, as with [`Self::get_agreement`], the read renews the
+    /// entry's ledger TTL when the remaining lifetime is below the renewal
+    /// threshold (see `storage::read_agreement`).  It lets callers query one
+    /// milestone's current status without deserializing the full [`Agreement`]
+    /// struct, which reduces ledger read cost for agreements with many
+    /// milestones.
     ///
     /// # Return type
-    /// The two `None` cases are deliberately *not* distinguished, and callers
-    /// should not try to. A missing agreement and a missing milestone are both
-    /// "there is no milestone at this position", and splitting them would mean
-    /// either leaking agreement existence through a read-only view or adding an
-    /// error variant that no caller can act on differently.
+    /// Like its siblings [`Self::get_agreement`] and [`Self::get_total_amount`],
+    /// this returns [`Result`], so the two failure modes stay distinguishable:
     ///
-    /// Callers that need to tell them apart should use
-    /// [`Self::get_agreement`] first: it returns
-    /// [`TrellisError::AgreementNotFound`] for a missing ID, so
-    /// `get_agreement(..).is_err()` disambiguates without any API change here.
+    /// - [`TrellisError::AgreementNotFound`] – no agreement exists for the
+    ///   given `agreement_id`.
+    /// - `Ok(None)` – the agreement exists but `milestone_id` is out of range.
     ///
-    /// Both paths are covered separately in `test.rs`
-    /// (`test_get_milestone_unknown_agreement_returns_none` for the storage miss,
-    /// `test_get_milestone_invalid_id_returns_none` for the vector miss).
+    /// Returning a bare `Option<Milestone>` would collapse those two very
+    /// different situations into a single `None`, forcing every caller to
+    /// handle this one entrypoint differently from its siblings for no
+    /// functional benefit.
     pub fn get_milestone(
         env: Env,
         agreement_id: BytesN<32>,

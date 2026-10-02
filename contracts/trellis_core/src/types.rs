@@ -17,8 +17,15 @@ pub enum EscrowStatus {
     Completed,
     /// Either party raised a dispute; awaiting resolver arbitration.
     Disputed,
-    /// Funds returned to payer (cancelled or ruled in payer's favour).
+    /// Funds returned to the payer after a dispute ruling in the payer's
+    /// favour. Written only by `resolve_dispute` — real tokens moved.
     Refunded,
+    /// Milestone cancelled while still `Pending`, before any funds were ever
+    /// locked. Written only by `cancel_unfunded_milestone`, which moves no
+    /// tokens — kept distinct from [`EscrowStatus::Refunded`] so readers of
+    /// on-chain state can tell a never-funded cancellation apart from a
+    /// dispute refund without replaying the event log.
+    Cancelled,
 }
 
 // ---------------------------------------------------------------------------
