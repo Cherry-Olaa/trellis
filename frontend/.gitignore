@@ -30,3 +30,6 @@ coverage
 test-results
 playwright-report
 playwright/.cache
+
+# Stray dev-server output dumps
+dev_*.txt
