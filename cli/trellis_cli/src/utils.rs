@@ -39,8 +39,7 @@ pub fn validate_stellar_address(addr: &str) -> Result<(), String> {
             }
         }
         _ => Err(
-            "Stellar address must start with 'G' (Ed25519 account) or 'C' (contract)"
-                .to_string(),
+            "Stellar address must start with 'G' (Ed25519 account) or 'C' (contract)".to_string(),
         ),
     }
 }

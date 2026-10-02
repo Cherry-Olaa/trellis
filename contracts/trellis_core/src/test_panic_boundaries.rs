@@ -24,6 +24,21 @@
 //! reaches it.
 
 use proptest::prelude::*;
+
+/// Deterministic proptest configuration.
+///
+/// The CI snapshot-validation step re-runs the suite and diffs the regenerated
+/// `test_snapshots/` tree, so the generated values must be identical on every
+/// run.  proptest otherwise seeds its RNG from a random source, which would
+/// make every regeneration produce a spurious diff.
+fn deterministic_config() -> ProptestConfig {
+    ProptestConfig {
+        cases: 256,
+        rng_algorithm: proptest::test_runner::RngAlgorithm::ChaCha,
+        rng_seed: proptest::test_runner::RngSeed::Fixed(0x5454_5454),
+        ..ProptestConfig::default()
+    }
+}
 use soroban_sdk::{testutils::Address as _, token, Address, BytesN, Env, Vec};
 
 use crate::{
@@ -338,7 +353,7 @@ macro_rules! assert_no_trap {
 }
 
 proptest! {
-    #![proptest_config(ProptestConfig::with_cases(256))]
+    #![proptest_config(deterministic_config())]
 
     /// For an agreement with 1..=4 milestones, calling every milestone-indexed
     /// entrypoint with an arbitrary `u32` index must never trap — regardless of

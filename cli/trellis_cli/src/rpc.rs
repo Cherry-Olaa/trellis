@@ -875,19 +875,33 @@ mod tests {
             "error: network passphrase mismatch: expected 'Test SDF Network ; September 2015'"
         ));
         assert!(!is_transient_error("unknown network 'testnet'"));
-        assert!(!is_transient_error("no network configured; run `stellar network add`"));
-        assert!(!is_transient_error("network name contains invalid characters"));
+        assert!(!is_transient_error(
+            "no network configured; run `stellar network add`"
+        ));
+        assert!(!is_transient_error(
+            "network name contains invalid characters"
+        ));
         // "deadline" / "temporary" / "unreachable" as bare words in an
         // unrelated message are no longer enough on their own.
-        assert!(!is_transient_error("filing deadline for the proposal has passed"));
-        assert!(!is_transient_error("temporary directory could not be created"));
+        assert!(!is_transient_error(
+            "filing deadline for the proposal has passed"
+        ));
+        assert!(!is_transient_error(
+            "temporary directory could not be created"
+        ));
     }
 
     #[test]
     fn transient_detects_network_failure_phrases() {
-        assert!(is_transient_error("network error: could not reach RPC endpoint"));
-        assert!(is_transient_error("Os error: network is unreachable (os error 101)"));
-        assert!(is_transient_error("dns lookup failed: Temporary failure in name resolution"));
+        assert!(is_transient_error(
+            "network error: could not reach RPC endpoint"
+        ));
+        assert!(is_transient_error(
+            "Os error: network is unreachable (os error 101)"
+        ));
+        assert!(is_transient_error(
+            "dns lookup failed: Temporary failure in name resolution"
+        ));
         assert!(is_transient_error("504 Gateway Timeout"));
         assert!(is_transient_error("grpc status: deadline exceeded"));
     }

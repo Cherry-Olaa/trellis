@@ -42,6 +42,21 @@
 //!    sweep with `PROPTEST_CASES=10000 cargo test test_properties`.
 
 use proptest::prelude::*;
+
+/// Deterministic proptest configuration.
+///
+/// The CI snapshot-validation step re-runs the suite and diffs the regenerated
+/// `test_snapshots/` tree, so the generated values must be identical on every
+/// run.  proptest otherwise seeds its RNG from a random source, which would
+/// make every regeneration produce a spurious diff.
+fn deterministic_config() -> ProptestConfig {
+    ProptestConfig {
+        cases: 256,
+        rng_algorithm: proptest::test_runner::RngAlgorithm::ChaCha,
+        rng_seed: proptest::test_runner::RngSeed::Fixed(0x5454_5454),
+        ..ProptestConfig::default()
+    }
+}
 use soroban_sdk::{testutils::Address as _, token, Address, BytesN, Env, Vec};
 
 use crate::{
@@ -108,6 +123,7 @@ fn milestones_from_amounts(env: &Env, amounts: &[i128]) -> Vec<Milestone> {
 // ---------------------------------------------------------------------------
 
 proptest! {
+    #![proptest_config(deterministic_config())]
     /// Verify balance conservation through a complete happy-path sequence for a
     /// randomly sized multi-milestone agreement (1–5 milestones, each 1–10_000).
     /// After every lock/release pair the contract balance must track exactly.
@@ -223,6 +239,7 @@ proptest! {
 // ---------------------------------------------------------------------------
 
 proptest! {
+    #![proptest_config(deterministic_config())]
     /// approve_and_release on a Pending milestone always fails, regardless of
     /// the milestone amount.
     #[test]
@@ -272,6 +289,7 @@ proptest! {
 // ---------------------------------------------------------------------------
 
 proptest! {
+    #![proptest_config(deterministic_config())]
     /// init with a single zero-amount milestone always returns InvalidMilestone.
     #[test]
     fn prop_zero_amount_always_rejected(seed in 0u8..=200u8) {
@@ -342,6 +360,7 @@ proptest! {
 // ---------------------------------------------------------------------------
 
 proptest! {
+    #![proptest_config(deterministic_config())]
     /// The pre-computed total_amount on any successfully created agreement
     /// equals the arithmetic sum of all its milestone amounts.
     #[test]
@@ -370,6 +389,7 @@ proptest! {
 // ---------------------------------------------------------------------------
 
 proptest! {
+    #![proptest_config(deterministic_config())]
     /// Completing milestone 0 in a two-milestone agreement must not change
     /// the state of milestone 1, regardless of milestone amounts.
     #[test]
@@ -454,6 +474,7 @@ fn fuzz_op_strategy() -> impl Strategy<Value = FuzzOp> {
 }
 
 proptest! {
+    #![proptest_config(deterministic_config())]
     /// Applies a random sequence of operations, targeting randomly chosen
     /// milestones in a multi-milestone agreement, in random order — skipping
     /// any operation that isn't a legal transition from that milestone's
