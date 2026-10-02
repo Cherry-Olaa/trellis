@@ -176,14 +176,14 @@ cd contracts/trellis_core
 cargo test
 ```
 
-The suite currently runs **43 tests**, split across three modules:
+The suite currently runs **51 tests**, split across three modules:
 
 | Module | Tests | Coverage |
 | --- | --- | --- |
-| `src/test.rs` | 23 | Example-based lifecycle, error paths, role checks, and TTL extension |
+| `src/test.rs` | 31 | Example-based lifecycle, error paths, role checks, and TTL extension |
 | `src/test_properties.rs` | 11 | `proptest` invariants — balance conservation, invalid amounts, and milestone isolation |
 | `src/test_panic_boundaries.rs` | 9 | Panic-boundary and fuzz coverage for every entrypoint |
-| **Total** | **43** | |
+| **Total** | **51** | |
 
 Representative example-based tests in `src/test.rs` include `test_happy_path`, `test_double_init_fails`, `test_dispute_and_refund_to_payer`, `test_cancel_unfunded_milestone`, `test_cancel_funded_milestone_fails_with_invalid_state_transition`, `test_get_agreement`, `test_get_milestone_unknown_agreement_returns_none`, `test_batch_lock_funds_partial_failure`, and the six `*_wrong_role_fails` authorization tests.
 
@@ -250,9 +250,11 @@ Transitions and entrypoints:
 - `Funded -> WorkSubmitted` is triggered by `submit_work`. The payee attaches proof of completed work.
 - `Funded -> Disputed` is triggered by `raise_dispute`. Either payer or payee can request resolver review before work is submitted.
 - `WorkSubmitted -> Completed` is triggered by `approve_and_release`. The payer accepts the work and funds are released to the payee.
+- `Funded -> Completed` / `WorkSubmitted -> Completed` is triggered by `release_partial` once the cumulative partial releases equal the milestone amount. A partial release that leaves funds in escrow keeps the milestone in its current status; `approve_and_release` and `resolve_dispute` then only move the remaining escrowed amount.
 - `WorkSubmitted -> Disputed` is triggered by `raise_dispute`. Either side can escalate submitted work for resolver review.
 - `Disputed -> Refunded` is triggered by `resolve_dispute` when the resolver rules for the payer.
 - `Disputed -> Completed` is triggered by `resolve_dispute` when the resolver rules for the payee.
+- When a transition leaves every milestone in `Completed` or `Refunded`, the contract also emits `agreement_completed` (`trls_cmpl`) once for the whole agreement.
 - `get_agreement` is read-only. It does not transition state; it returns the current agreement snapshot.
 - `init` creates the agreement and starts each milestone in `Pending`.
 
@@ -315,7 +317,7 @@ Rules for changing ownership:
 
 All of the following must be true before requesting review:
 
-- `cargo test` passes 41/41 in `contracts/trellis_core`.
+- `cargo test` passes 51/51 in `contracts/trellis_core`.
 - `cargo build` passes with zero warnings in both Rust crates you touched.
 - The PR description explains what changed and why.
 - The PR references the issue number using `Closes #X`.

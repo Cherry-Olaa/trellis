@@ -59,7 +59,7 @@
               "function_name": "init",
               "args": [
                 {
-                  "bytes": "6666666666666666666666666666666666666666666666666666666666666666"
+                  "bytes": "6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e"
                 },
                 {
                   "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM"
@@ -272,7 +272,7 @@
                   "symbol": "Agreement"
                 },
                 {
-                  "bytes": "6666666666666666666666666666666666666666666666666666666666666666"
+                  "bytes": "6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e"
                 }
               ]
             },
@@ -292,7 +292,7 @@
                       "symbol": "Agreement"
                     },
                     {
-                      "bytes": "6666666666666666666666666666666666666666666666666666666666666666"
+                      "bytes": "6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e"
                     }
                   ]
                 },
@@ -304,7 +304,7 @@
                         "symbol": "agreement_id"
                       },
                       "val": {
-                        "bytes": "6666666666666666666666666666666666666666666666666666666666666666"
+                        "bytes": "6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e"
                       }
                     },
                     {
@@ -371,6 +371,14 @@
                       },
                       "val": {
                         "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM"
+                      }
+                    },
+                    {
+                      "key": {
+                        "symbol": "released_amounts"
+                      },
+                      "val": {
+                        "map": []
                       }
                     },
                     {

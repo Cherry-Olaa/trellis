@@ -3,6 +3,7 @@ mod config;
 mod input;
 mod rpc;
 mod sanitizer;
+mod strkey;
 mod utils;
 
 #[cfg(test)]
@@ -311,6 +312,7 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::strkey::{decode, encode, StrkeyError, StrkeyKind};
 
     #[test]
     fn long_version_reports_manifest_sdk_range() {
@@ -327,5 +329,68 @@ mod tests {
         let rendered = Cli::command().render_version();
         assert!(!rendered.contains("soroban-sdk"), "got: {rendered}");
         assert!(rendered.contains(env!("CARGO_PKG_VERSION")));
+    }
+
+    // ── Strkey codec smoke tests ──────────────────────────────────────────
+    // The full test-vector suite lives in `strkey.rs`; these tests ensure the
+    // module is wired into the CLI crate and that the public API round-trips
+    // through the same entry points downstream sub-tasks will use.
+
+    #[test]
+    fn strkey_round_trips_ed25519_public_key() {
+        // Known-good G-address (Stellar docs example).
+        let g = "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF";
+        let (kind, bytes) = decode(g).expect("valid G-address");
+        assert_eq!(kind, StrkeyKind::Ed25519PublicKey);
+        assert_eq!(bytes.len(), 32);
+        assert_eq!(encode(StrkeyKind::Ed25519PublicKey, &bytes).unwrap(), g);
+    }
+
+    #[test]
+    fn strkey_round_trips_ed25519_secret_seed() {
+        // Known-good S-address (Stellar docs example).
+        let s = "SAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+        let (kind, bytes) = decode(s).expect("valid S-address");
+        assert_eq!(kind, StrkeyKind::Ed25519SecretSeed);
+        assert_eq!(bytes.len(), 32);
+        assert_eq!(encode(StrkeyKind::Ed25519SecretSeed, &bytes).unwrap(), s);
+    }
+
+    #[test]
+    fn strkey_round_trips_contract() {
+        // Known-good C-address (Stellar docs example).
+        let c = "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM";
+        let (kind, bytes) = decode(c).expect("valid C-address");
+        assert_eq!(kind, StrkeyKind::Contract);
+        assert_eq!(bytes.len(), 32);
+        assert_eq!(encode(StrkeyKind::Contract, &bytes).unwrap(), c);
+    }
+
+    #[test]
+    fn strkey_rejects_corrupted_checksum() {
+        // Flip the final base32 character of a valid G-address; the CRC16
+        // trailer must reject it rather than silently returning garbage.
+        let mut corrupted = String::from("GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF");
+        corrupted.pop();
+        corrupted.push('G');
+        match decode(&corrupted) {
+            Err(StrkeyError::InvalidChecksum) => {}
+            other => panic!("expected InvalidChecksum, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn strkey_rejects_unknown_version_byte() {
+        // A valid base32 + CRC16 payload with an unrecognized version byte
+        // must be rejected — guards against silently accepting future or
+        // foreign strkey variants.
+        let bad = encode(StrkeyKind::Ed25519PublicKey, &[0u8; 32]).unwrap();
+        let mut bytes = crate::strkey::base32_decode(&bad).unwrap();
+        bytes[0] = 0xFF;
+        let reencoded = crate::strkey::base32_encode(&bytes);
+        match decode(&reencoded) {
+            Err(StrkeyError::UnknownVersion(0xFF)) => {}
+            other => panic!("expected UnknownVersion(0xFF), got {other:?}"),
+        }
     }
 }

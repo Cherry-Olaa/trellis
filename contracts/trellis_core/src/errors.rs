@@ -1,10 +1,10 @@
-use soroban_sdk::contracterror;
+use soroban_contracterror;
 
 /// Canonical error type for the Trellis Protocol contract.
 ///
 /// `#[contracterror]` serialises each variant's `u32` discriminant into the
-/// XDR `ScError` envelope returned to the invoker, making error codes part of
-/// the public on-chain ABI.
+/// XDR `ScError` envelope returned to the invoker, making error codes part of the
+/// public on-chain ABI.
 ///
 /// # Stability rule
 /// Discriminant values are **permanent** from the first mainnet deployment
@@ -15,7 +15,7 @@ use soroban_sdk::contracterror;
 /// was renumbered from `7` to `6` to close the gap. `NoFundsToRefund` (then
 /// discriminant `6`) was itself later removed for the same reason: no
 /// codepath ever returned it. Discriminant `6` is left vacant rather than
-/// reused, per the append-only rule above. SDK consumers pinned to the old
+/// reused, per the append-only rule above. SDT consumers pinned to the old
 /// numbering must regenerate their bindings.
 ///
 /// # Exhaustiveness
@@ -101,4 +101,25 @@ pub enum TrellisError {
     /// integrator can tell "you sent a bad amount" from "you tried to
     /// pre-advance a milestone".
     InvalidInitialMilestoneStatus = 11,
+
+    /// The payer/payee split supplied to `resolve_dispute` does not sum
+    /// to the milestone's locked amount. A split resolution must account
+    /// for every unit of escrowed funds exactly once; any other total either
+    /// leaves funds stranded in the contract or attempts to pay out more
+    /// than was locked.
+    InvalidSplitAmount = 12,
+
+    /// `init` was called with more milestones than the contract's
+    /// `MAX_MILESTONES` cap (50). Beyond that cap the per-agreement storage
+    /// and gas costs grow without bound, so oversized agreements are rejected
+    /// up front.
+    ///
+    /// Appended as discriminant `13` per the stability rule above (`11` and
+    /// `12` are already assigned).
+    MilestoneCountExceeded = 13,
+
+    /// `init` was called with `payer == payee`, which would collapse both
+    /// sides of the escrow into a single address — there would be no real
+    /// counterparty to release or dispute funds.
+    PayerEqualsPayee = 14,
 }

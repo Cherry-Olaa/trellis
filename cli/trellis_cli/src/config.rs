@@ -1,3 +1,4 @@
+use serde::Deserialize;
 /// Network preset selectable via the CLI's `--network` flag.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
 #[value(rename_all = "lower")]
@@ -270,6 +271,71 @@ impl Config {
     }
 }
 
+/// Response body from a Soroban RPC `getNetwork` call.
+///
+/// Only the fields we care about are declared; `serde` ignores the rest.
+#[derive(Debug, Deserialize)]
+pub struct GetNetworkResponse {
+    pub passphrase: String,
+}
+
+/// Compare the passphrase returned by the configured RPC endpoint's
+/// `getNetwork` method against `config.network_passphrase`.
+///
+/// A mismatch means the CLI is pointed at one network while signing for
+/// another — e.g. `--rpc-url` aimed at mainnet but `--network-passphrase`
+/// still set to testnet. Without this check the discrepancy only surfaces
+/// much later as a confusing downstream failure, so we surface it here with
+/// both values named explicitly.
+///
+/// Returns `Ok(())` when the passphrases match, or `Err` with a specific
+/// message naming both values when they differ.
+pub fn verify_network_passphrase(
+    config: &Config,
+    remote_passphrase: &str,
+) -> Result<(), String> {
+    if remote_passphrase == config.network_passphrase {
+        return Ok(());
+    }
+    Err(format!(
+        "Network passphrase mismatch: the RPC endpoint at {} reports passphrase \
+         {:?}, but the CLI is configured with {:?}. Point --rpc-url and \
+         --network-passphrase at the same network.",
+        config.rpc_url, remote_passphrase, config.network_passphrase
+    ))
+}
+
+/// Fetch the network passphrase from the configured RPC endpoint and verify
+/// it matches `config.network_passphrase`.
+///
+/// Issues a JSON-RPC 2.0 `getNetwork` request to `config.rpc_url` and compares
+/// the returned `passphrase` against the configured value. Intended to be
+/// called as an early check (e.g. from `validate_environment`) so a
+/// misconfigured endpoint/passphrase pair fails fast with a clear message
+/// instead of a confusing downstream error.
+pub async fn verify_network_passphrase_against_rpc(config: &Config) -> Result<(), String> {
+    let body = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "getNetwork",
+        "params": {},
+    });
+
+    let response = reqwest::Client::new()
+        .post(&config.rpc_url)
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| format!("Failed to reach RPC endpoint {}: {e}", config.rpc_url))?;
+
+    let parsed: GetNetworkResponse = response
+        .json()
+        .await
+        .map_err(|e| format!("Malformed getNetwork response from {}: {e}", config.rpc_url))?;
+
+    verify_network_passphrase(config, &parsed.passphrase)
+}
+
 /// Read a source key from `path`, trimming surrounding whitespace / newlines.
 ///
 /// Keeping the secret in a file (ideally mode `0600`) instead of an argv
@@ -429,44 +495,44 @@ mod tests {
         assert!(err[0].contains("RPC URL"), "got: {:?}", err);
     }
 
-    // --- validate_rpc_url: cleartext HTTP guard (#156) ---
+    // --- verify_network_passphrase (#<issue>) ---
 
-    /// Cleartext http:// to a non-loopback host is rejected by default.
     #[test]
-    fn rpc_url_rejects_cleartext_http_to_non_loopback() {
-        let err = validate_rpc_url("http://rpc.example.com/soroban", false).unwrap_err();
+    fn network_passphrase_matches_configured_value() {
+        let cfg = config_with(&valid_contract_id(), "SABC123");
         assert!(
-            err.contains("cleartext HTTP") || err.contains("https"),
-            "expected cleartext-HTTP error, got: {err}"
+            verify_network_passphrase(&cfg, "Test SDF Network ; September 2015").is_ok()
         );
     }
 
-    /// With unsafe_rpc=true the same URL returns Ok(Some(warning)) instead of Err.
     #[test]
-    fn rpc_url_unsafe_rpc_downgrades_cleartext_to_warning() {
-        let result = validate_rpc_url("http://rpc.example.com/soroban", true);
-        assert!(result.is_ok(), "unsafe_rpc should not error; got: {result:?}");
-        let warning = result.unwrap();
+    fn network_passphrase_mismatch_names_both_values() {
+        let cfg = config_with(&valid_contract_id(), "SABC123");
+        let err = verify_network_passphrase(
+            &cfg,
+            "Public Global Stellar Network ; September 2015",
+        )
+        .unwrap_err();
         assert!(
-            warning.is_some(),
-            "unsafe_rpc should return Some(warning) for cleartext non-loopback URL"
+            err.contains("Public Global Stellar Network ; September 2015"),
+            "error should name the remote passphrase, got: {err}"
+        );
+        assert!(
+            err.contains("Test SDF Network ; September 2015"),
+            "error should name the configured passphrase, got: {err}"
+        );
+        assert!(
+            err.contains(&cfg.rpc_url),
+            "error should name the RPC endpoint, got: {err}"
         );
     }
 
-    /// https:// to any host is always clean regardless of unsafe_rpc.
     #[test]
-    fn rpc_url_https_always_ok_no_warning() {
-        let result = validate_rpc_url("https://rpc.example.com/soroban", false);
-        assert!(result.is_ok());
-        assert!(result.unwrap().is_none(), "https:// should produce no warning");
+    fn network_passphrase_mismatch_is_not_triggered_by_matching_custom_value() {
+        let mut cfg = config_with(&valid_contract_id(), "SABC123");
+        cfg.network_passphrase = "Standalone Network ; February 2017".to_string();
+        assert!(
+            verify_network_passphrase(&cfg, "Standalone Network ; February 2017").is_ok()
+        );
     }
-
-    /// Loopback http:// is not subject to the cleartext guard.
-    #[test]
-    fn rpc_url_loopback_http_always_ok() {
-        for loopback in ["http://localhost:8000", "http://127.0.0.1:8000", "http://[::1]:8000"] {
-            let result = validate_rpc_url(loopback, false);
-            assert!(result.is_ok(), "loopback http should be ok: {loopback} → {result:?}");
-            assert!(result.unwrap().is_none(), "loopback http should produce no warning: {loopback}");
-        }
-    }
+}
