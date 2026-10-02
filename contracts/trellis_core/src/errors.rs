@@ -1,4 +1,4 @@
-use soroban_contracterror;
+use soroban_sdk::contracterror;
 
 /// Canonical error type for the Trellis Protocol contract.
 ///
@@ -56,10 +56,11 @@ pub enum TrellisError {
     InvalidStateTransition = 5,
 
     // Discriminant 6 vacant — formerly `NoFundsToRefund`, removed as
-// dead code: no codepath ever returned it. `cancel_unfunded_milestone`// only ever runs while a milestone still holds no funds, so calling it
-// on a milestone that has left `Pending` is a state machine violation
-// ([`TrellisError::InvalidStateTransition`]), not a distinct economic
-// one. Left vacant rather than reused, per the append-only rule above.
+    // dead code: no codepath ever returned it. `cancel_unfunded_milestone`
+    // only ever runs while a milestone still holds no funds, so calling it
+    // on a milestone that has left `Pending` is a state machine violation
+    // ([`TrellisError::InvalidStateTransition`]), not a distinct economic
+    // one. Left vacant rather than reused, per the append-only rule above.
     /// `init` was called with an empty `milestones` vector. An agreement with
     /// no milestones can never transition through any state, permanently
     /// wasting the storage it occupies.
@@ -107,4 +108,18 @@ pub enum TrellisError {
     /// leaves funds stranded in the contract or attempts to pay out more
     /// than was locked.
     InvalidSplitAmount = 12,
+
+    /// `init` was called with more milestones than the contract's
+    /// `MAX_MILESTONES` cap (50). Beyond that cap the per-agreement storage
+    /// and gas costs grow without bound, so oversized agreements are rejected
+    /// up front.
+    ///
+    /// Appended as discriminant `13` per the stability rule above (`11` and
+    /// `12` are already assigned).
+    MilestoneCountExceeded = 13,
+
+    /// `init` was called with `payer == payee`, which would collapse both
+    /// sides of the escrow into a single address — there would be no real
+    /// counterparty to release or dispute funds.
+    PayerEqualsPayee = 14,
 }

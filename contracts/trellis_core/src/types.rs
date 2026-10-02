@@ -137,3 +137,59 @@ pub struct Agreement {
     /// would silently read back as zero and allow a double payout.
     pub released_amounts: Map<u32, i128>,
 }
+
+// ---------------------------------------------------------------------------
+// AgreementHeader — the on-chain form of an Agreement, minus its milestones
+// ---------------------------------------------------------------------------
+
+/// Ledger form of an [`Agreement`] with the milestone vector factored out.
+///
+/// #401: `DataKey::Agreement` used to store the whole `Agreement`, so every
+/// `lock_funds` / `submit_work` / `approve_and_release` / `raise_dispute` /
+/// `resolve_dispute` / `cancel_unfunded_milestone` call re-serialised *every*
+/// milestone back to storage even though only one had changed — per-transaction
+/// write cost, and therefore the fee paid, grew linearly with the agreement's
+/// milestone count.
+///
+/// The header now holds everything except `milestones`; each milestone lives
+/// under its own `DataKey::Milestone(agreement_id, index)` entry, so a
+/// single-milestone transition writes exactly one ledger entry.
+///
+/// This type is deliberately *not* part of the contract's public ABI:
+/// `get_agreement` still returns the full [`Agreement`], reassembled by
+/// `storage::read_agreement`, so no CLI/frontend caller changes.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AgreementHeader {
+    /// Globally unique identifier for this agreement (32-byte hash).
+    pub agreement_id: BytesN<32>,
+    /// The party funding the escrow (client / buyer).
+    pub payer: Address,
+    /// The party delivering work and receiving funds (contractor / seller).
+    pub payee: Address,
+    /// SAC or custom token contract used for payments.
+    pub token: Address,
+    /// Trusted third-party address authorised to resolve disputes.
+    pub dispute_resolver: Address,
+    /// Sum of every milestone's `amount`. See [`Agreement::total_amount`].
+    pub total_amount: i128,
+    /// How many per-milestone entries this agreement owns.
+    ///
+    /// Fixed at `init` (nothing can resize the milestone list afterwards) and
+    /// what `storage::read_agreement` uses to know how many
+    /// `DataKey::Milestone` entries to read back.
+    pub milestone_count: u32,
+    /// Cumulative amount already paid out to the payee per milestone via
+    /// partial releases, keyed by milestone index.
+    ///
+    /// Empty at `init`; only `release_partial` inserts entries. A milestone
+    /// with no entry has released nothing. The amount still held in escrow
+    /// for a milestone is always `milestone.amount - released_amounts[id]`.
+    ///
+    /// This stays in the header rather than moving onto the per-milestone
+    /// entries because the same split #401 applies to the milestone vector
+    /// does not apply here: it is a small map that only `release_partial`
+    /// grows, so keeping it with the agreement-level data leaves every other
+    /// transition writing exactly one entry, as before.
+    pub released_amounts: Map<u32, i128>,
+}

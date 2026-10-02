@@ -6,8 +6,8 @@ use soroban_sdk::{
 
 use crate::{
     errors::TrellisError,
+    test_utils::{agreement_id, auth_as, one_milestone, setup},
     types::{EscrowStatus, Milestone},
-    TrellisContract, TrellisContractClient, MAX_PROOF_URI_LEN,
 };
 
 use crate::types::SplitResolution;
@@ -443,7 +443,6 @@ fn test_lock_funds_needs_no_token_allowance() {
     let id = agreement_id(&env, 90);
     let amount: i128 = 1_000;
 
-    auth_as(&env, &payer);
     client.init(
         &id,
         &payer,
@@ -461,7 +460,6 @@ fn test_lock_funds_needs_no_token_allowance() {
     assert!(payer_before >= amount, "fixture must fund the payer");
 
     // No approve / set_allowance call is made here — deliberately.
-    auth_as(&env, &payer);
     client.lock_funds(&id, &0u32);
 
     assert_eq!(
@@ -556,7 +554,6 @@ fn test_dispute_and_refund_to_payer() {
         "dispute refund must still persist Refunded"
     );
 }
-
 
 /// Cancel a milestone that was never funded, then verify a second cancel fails.
 #[test]
@@ -1765,7 +1762,9 @@ fn test_resolve_dispute_split_amounts_must_sum_to_locked_total() {
 
     // The milestone must still be Disputed and the escrow untouched, so a
     // rejected split cannot be used to strand or drain funds.
-    let milestone = client.get_milestone(&id, &0u32).expect("milestone 0 must exist");
+    let milestone = client
+        .get_milestone(&id, &0u32)
+        .expect("milestone 0 must exist");
     assert_eq!(
         milestone.status,
         EscrowStatus::Disputed,

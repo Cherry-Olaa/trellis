@@ -57,6 +57,14 @@ jobs:
     name: Dependency vulnerability scan (cargo audit + cargo deny)
     runs-on: ubuntu-latest
 
+    env:
+      # cargo-audit and cargo-deny are installed as binaries and neither
+      # compiles the workspace, so run them under the latest stable rustc.
+      # The rust-toolchain.toml pin (1.86) would otherwise be picked up by
+      # rustup and reject current releases of these tools, which require
+      # rustc >= 1.88.
+      RUSTUP_TOOLCHAIN: stable
+
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
