@@ -1,4 +1,4 @@
-use soroban_contracterror;
+use soroban_sdk::contracterror;
 
 /// Canonical error type for the Trellis Protocol contract.
 ///

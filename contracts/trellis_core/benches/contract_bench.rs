@@ -151,6 +151,38 @@ fn bench_lock_funds() {
     );
 }
 
+/// #401 — the same `lock_funds` transition against a 10-milestone agreement.
+///
+/// Before the per-milestone storage split this re-serialised all ten
+/// milestones into the single agreement entry, so its cost tracked
+/// `lock_funds` above. Afterwards it should be ~independent of the milestone
+/// count, which is exactly what comparing the two lines shows.
+fn bench_lock_funds_10_milestones() {
+    let (env, payer, payee, dispute_resolver, token_address, client) = setup();
+    let id = agreement_id(&env, 30);
+
+    client.init(
+        &id,
+        &payer,
+        &payee,
+        &token_address,
+        &n_milestones(&env, 10, 1_000),
+        &dispute_resolver,
+    );
+
+    env.cost_estimate().budget().reset_default();
+
+    client.lock_funds(&id, &0u32);
+
+    let cpu = env.cost_estimate().budget().cpu_instruction_cost();
+    let mem = env.cost_estimate().budget().memory_bytes_cost();
+
+    println!(
+        r#"{{"benchmark":"lock_funds_10_milestones","cpu_instructions":{},"memory_bytes":{}}}"#,
+        cpu, mem
+    );
+}
+
 fn bench_submit_work() {
     let (env, payer, payee, dispute_resolver, token_address, client) = setup();
     let id = agreement_id(&env, 4);
@@ -326,6 +358,8 @@ fn main() {
     bench_init_10_milestones();
     println!(",");
     bench_lock_funds();
+    println!(",");
+    bench_lock_funds_10_milestones();
     println!(",");
     bench_submit_work();
     println!(",");
