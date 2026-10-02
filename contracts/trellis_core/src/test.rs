@@ -6,8 +6,8 @@ use soroban_sdk::{
 
 use crate::{
     errors::TrellisError,
+    test_utils::{agreement_id, auth_as, one_milestone, setup},
     types::{EscrowStatus, Milestone},
-    TrellisContract, TrellisContractClient,
 };
 
 use crate::types::SplitResolution;

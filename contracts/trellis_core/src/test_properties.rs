@@ -42,72 +42,35 @@
 //!    sweep with `PROPTEST_CASES=10000 cargo test test_properties`.
 
 use proptest::prelude::*;
+
+/// Deterministic proptest configuration.
+///
+/// The CI snapshot-validation step re-runs the suite and diffs the regenerated
+/// `test_snapshots/` tree, so the generated values must be identical on every
+/// run.  proptest otherwise seeds its RNG from a random source, which would
+/// make every regeneration produce a spurious diff.
+fn deterministic_config() -> ProptestConfig {
+    ProptestConfig {
+        cases: 256,
+        rng_algorithm: proptest::test_runner::RngAlgorithm::ChaCha,
+        rng_seed: proptest::test_runner::RngSeed::Fixed(0x5454_5454),
+        ..ProptestConfig::default()
+    }
+}
 use soroban_sdk::{testutils::Address as _, token, Address, BytesN, Env, Vec};
 
 use crate::{
     errors::TrellisError,
-    types::{EscrowStatus, Milestone},
-    TrellisContract, TrellisContractClient,
+    test_utils::{agreement_id, milestones_from_amounts, setup_mocked},
+    types::EscrowStatus,
 };
-
-// ---------------------------------------------------------------------------
-// Helpers shared with the property tests
-// ---------------------------------------------------------------------------
-
-fn agreement_id(env: &Env, seed: u8) -> BytesN<32> {
-    BytesN::from_array(env, &[seed; 32])
-}
-
-/// Spin up a fresh Soroban environment with a funded payer.
-///
-/// Returns `(env, payer, payee, dispute_resolver, token_address, client)`.
-fn setup() -> (
-    Env,
-    Address,
-    Address,
-    Address,
-    Address,
-    TrellisContractClient<'static>,
-) {
-    let env = Env::default();
-    env.mock_all_auths();
-
-    let payer = Address::generate(&env);
-    let payee = Address::generate(&env);
-    let dispute_resolver = Address::generate(&env);
-
-    let token_admin = Address::generate(&env);
-    let token_address = env
-        .register_stellar_asset_contract_v2(token_admin.clone())
-        .address();
-    let token_admin_client = token::StellarAssetClient::new(&env, &token_address);
-    // Mint generously so any combination of milestone amounts can be funded.
-    token_admin_client.mint(&payer, &1_000_000_000);
-
-    let contract_id = env.register(TrellisContract, ());
-    let client = TrellisContractClient::new(&env, &contract_id);
-
-    (env, payer, payee, dispute_resolver, token_address, client)
-}
-
-/// Build a `Vec<Milestone>` from a slice of amounts. All statuses are Pending.
-fn milestones_from_amounts(env: &Env, amounts: &[i128]) -> Vec<Milestone> {
-    let mut v: Vec<Milestone> = Vec::new(env);
-    for &amount in amounts.iter() {
-        v.push_back(Milestone {
-            amount,
-            status: EscrowStatus::Pending,
-            proof_uri: None,
-        });
-    }
-    v
-}
 
 // ---------------------------------------------------------------------------
 // Invariant 1 — Balance conservation
 // ---------------------------------------------------------------------------
 
 proptest! {
+    #![proptest_config(deterministic_config())]
     /// Verify balance conservation through a complete happy-path sequence for a
     /// randomly sized multi-milestone agreement (1–5 milestones, each 1–10_000).
     /// After every lock/release pair the contract balance must track exactly.
@@ -115,7 +78,7 @@ proptest! {
     fn prop_balance_conservation_happy_path(
         amounts in prop::collection::vec(1i128..=10_000i128, 1..=5usize),
     ) {
-        let (env, payer, payee, dispute_resolver, token_address, client) = setup();
+        let (env, payer, payee, dispute_resolver, token_address, client) = setup_mocked();
         let token_client = token::TokenClient::new(&env, &token_address);
         let id = agreement_id(&env, 42);
 
@@ -175,7 +138,7 @@ proptest! {
     fn prop_balance_conservation_dispute_refund(
         amounts in prop::collection::vec(1i128..=10_000i128, 1..=3usize),
     ) {
-        let (env, payer, payee, dispute_resolver, token_address, client) = setup();
+        let (env, payer, payee, dispute_resolver, token_address, client) = setup_mocked();
         let token_client = token::TokenClient::new(&env, &token_address);
         let id = agreement_id(&env, 43);
 
@@ -223,11 +186,12 @@ proptest! {
 // ---------------------------------------------------------------------------
 
 proptest! {
+    #![proptest_config(deterministic_config())]
     /// approve_and_release on a Pending milestone always fails, regardless of
     /// the milestone amount.
     #[test]
     fn prop_approve_on_pending_always_fails(amount in 1i128..=100_000i128) {
-        let (env, payer, payee, dispute_resolver, token_address, client) = setup();
+        let (env, payer, payee, dispute_resolver, token_address, client) = setup_mocked();
         let id = agreement_id(&env, 50);
 
         client.init(
@@ -248,7 +212,7 @@ proptest! {
     /// the milestone amount.
     #[test]
     fn prop_approve_on_funded_always_fails(amount in 1i128..=100_000i128) {
-        let (env, payer, payee, dispute_resolver, token_address, client) = setup();
+        let (env, payer, payee, dispute_resolver, token_address, client) = setup_mocked();
         let id = agreement_id(&env, 51);
 
         client.init(
@@ -272,10 +236,11 @@ proptest! {
 // ---------------------------------------------------------------------------
 
 proptest! {
+    #![proptest_config(deterministic_config())]
     /// init with a single zero-amount milestone always returns InvalidMilestone.
     #[test]
     fn prop_zero_amount_always_rejected(seed in 0u8..=200u8) {
-        let (env, payer, payee, dispute_resolver, token_address, client) = setup();
+        let (env, payer, payee, dispute_resolver, token_address, client) = setup_mocked();
         // Use a different ID each run to avoid AlreadyInitialized masking the error.
         let id = BytesN::from_array(&env, &[seed; 32]);
 
@@ -294,7 +259,7 @@ proptest! {
     /// init with a negative milestone amount always returns InvalidMilestone.
     #[test]
     fn prop_negative_amount_always_rejected(amount in i128::MIN..=-1i128) {
-        let (env, payer, payee, dispute_resolver, token_address, client) = setup();
+        let (env, payer, payee, dispute_resolver, token_address, client) = setup_mocked();
         let id = agreement_id(&env, 60);
 
         let result = client.try_init(
@@ -316,7 +281,7 @@ proptest! {
         prefix_amounts in prop::collection::vec(1i128..=10_000i128, 0..=3usize),
         suffix_amounts in prop::collection::vec(1i128..=10_000i128, 0..=3usize),
     ) {
-        let (env, payer, payee, dispute_resolver, token_address, client) = setup();
+        let (env, payer, payee, dispute_resolver, token_address, client) = setup_mocked();
         let id = agreement_id(&env, 61);
 
         // Interleave a zero in the middle.
@@ -342,13 +307,14 @@ proptest! {
 // ---------------------------------------------------------------------------
 
 proptest! {
+    #![proptest_config(deterministic_config())]
     /// The pre-computed total_amount on any successfully created agreement
     /// equals the arithmetic sum of all its milestone amounts.
     #[test]
     fn prop_total_amount_equals_sum(
         amounts in prop::collection::vec(1i128..=10_000i128, 1..=8usize),
     ) {
-        let (env, payer, payee, dispute_resolver, token_address, client) = setup();
+        let (env, payer, payee, dispute_resolver, token_address, client) = setup_mocked();
         let id = agreement_id(&env, 70);
 
         let expected_total: i128 = amounts.iter().sum();
@@ -370,6 +336,7 @@ proptest! {
 // ---------------------------------------------------------------------------
 
 proptest! {
+    #![proptest_config(deterministic_config())]
     /// Completing milestone 0 in a two-milestone agreement must not change
     /// the state of milestone 1, regardless of milestone amounts.
     #[test]
@@ -377,7 +344,7 @@ proptest! {
         amount0 in 1i128..=10_000i128,
         amount1 in 1i128..=10_000i128,
     ) {
-        let (env, payer, payee, dispute_resolver, token_address, client) = setup();
+        let (env, payer, payee, dispute_resolver, token_address, client) = setup_mocked();
         let id = agreement_id(&env, 80);
 
         let milestones = milestones_from_amounts(&env, &[amount0, amount1]);
@@ -404,7 +371,7 @@ proptest! {
         amount0 in 1i128..=10_000i128,
         amount1 in 1i128..=10_000i128,
     ) {
-        let (env, payer, payee, dispute_resolver, token_address, client) = setup();
+        let (env, payer, payee, dispute_resolver, token_address, client) = setup_mocked();
         let id = agreement_id(&env, 81);
 
         let milestones = milestones_from_amounts(&env, &[amount0, amount1]);
@@ -454,6 +421,7 @@ fn fuzz_op_strategy() -> impl Strategy<Value = FuzzOp> {
 }
 
 proptest! {
+    #![proptest_config(deterministic_config())]
     /// Applies a random sequence of operations, targeting randomly chosen
     /// milestones in a multi-milestone agreement, in random order — skipping
     /// any operation that isn't a legal transition from that milestone's
@@ -468,7 +436,7 @@ proptest! {
         amounts in prop::collection::vec(1i128..=10_000i128, 2..=4usize),
         ops in prop::collection::vec((0usize..4, fuzz_op_strategy()), 20..=60usize),
     ) {
-        let (env, payer, payee, dispute_resolver, token_address, client) = setup();
+        let (env, payer, payee, dispute_resolver, token_address, client) = setup_mocked();
         let token_client = token::TokenClient::new(&env, &token_address);
         let id = agreement_id(&env, 90);
 

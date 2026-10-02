@@ -56,7 +56,8 @@ pub enum TrellisError {
     InvalidStateTransition = 5,
 
     // Discriminant 6 vacant — formerly `NoFundsToRefund`, removed as
-    // dead code: no codepath ever returned it. `cancel_unfunded_milestone`// only ever runs while a milestone still holds no funds, so calling it
+    // dead code: no codepath ever returned it. `cancel_unfunded_milestone`
+    // only ever runs while a milestone still holds no funds, so calling it
     // on a milestone that has left `Pending` is a state machine violation
     // ([`TrellisError::InvalidStateTransition`]), not a distinct economic
     // one. Left vacant rather than reused, per the append-only rule above.
@@ -106,22 +107,19 @@ pub enum TrellisError {
     /// for every unit of escrowed funds exactly once; any other total either
     /// leaves funds stranded in the contract or attempts to pay out more
     /// than was locked.
-    InvalidSplitAmounts = 12,
+    InvalidSplitAmount = 12,
 
-    /// `init` was called with more than `MAX_MILESTONES` milestones.
-    /// An oversized milestone list would make every later read, write and
-    /// status transition cost unbounded gas, so it is rejected up front.
+    /// `init` was called with more milestones than the contract's
+    /// `MAX_MILESTONES` cap (50). Beyond that cap the per-agreement storage
+    /// and gas costs grow without bound, so oversized agreements are rejected
+    /// up front.
+    ///
+    /// Appended as discriminant `13` per the stability rule above (`11` and
+    /// `12` are already assigned).
     MilestoneCountExceeded = 13,
 
-    /// `init` was called with `payer == payee`. A single address cannot both
-    /// fund the escrow and be paid out of it, which would let one party
-    /// unilaterally release its own funds.
+    /// `init` was called with `payer == payee`, which would collapse both
+    /// sides of the escrow into a single address — there would be no real
+    /// counterparty to release or dispute funds.
     PayerEqualsPayee = 14,
-
-    /// `release_partial` was called with an `amount` that is zero, negative,
-    /// or larger than what is still escrowed for that milestone. The release
-    /// must be strictly positive and can never exceed the milestone's
-    /// remaining balance, so the sum paid out for a milestone is capped by
-    /// what was locked for it.
-    InvalidReleaseAmount = 15,
 }
