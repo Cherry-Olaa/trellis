@@ -1,3 +1,4 @@
+use serde::Deserialize;
 /// Network preset selectable via the CLI's `--network` flag.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
 #[value(rename_all = "lower")]
@@ -106,7 +107,13 @@ pub fn validate_contract_id(id: &str) -> Result<(), String> {
 /// (`http://localhost:8000`) still works; any other scheme (`ftp`, `file`,
 /// `ws`, …) and any URL with an empty host is rejected here with a clear
 /// message.
-pub fn validate_rpc_url(raw: &str) -> Result<(), String> {
+///
+/// Cleartext `http://` to a non-loopback host is refused by default to
+/// prevent a compromised `.env` from silently redirecting traffic to an
+/// unauthenticated endpoint. Pass `unsafe_rpc = true` to downgrade the hard
+/// error to a printed warning (useful for development devnets). This mirrors
+/// the `--unsafe-rpc` CLI flag (#156).
+pub fn validate_rpc_url(raw: &str, unsafe_rpc: bool) -> Result<Option<String>, String> {
     let parsed =
         url::Url::parse(raw).map_err(|e| format!("RPC URL {raw:?} is not a valid URL: {e}"))?;
 
@@ -123,7 +130,24 @@ pub fn validate_rpc_url(raw: &str) -> Result<(), String> {
         return Err(format!("RPC URL {raw:?} is missing a host"));
     }
 
-    Ok(())
+    // Guard against cleartext HTTP to non-loopback hosts (#156).
+    if parsed.scheme() == "http" {
+        let host = parsed.host_str().unwrap_or("");
+        let is_loopback = matches!(host, "localhost" | "127.0.0.1" | "::1");
+        if !is_loopback {
+            let msg = format!(
+                "Warning: RPC URL {raw:?} uses cleartext HTTP to a non-loopback host. \
+                 Traffic may be intercepted. Use https:// or pass --unsafe-rpc to suppress this error."
+            );
+            if unsafe_rpc {
+                return Ok(Some(msg));
+            } else {
+                return Err(msg);
+            }
+        }
+    }
+
+    Ok(None)
 }
 
 impl Config {
@@ -144,7 +168,7 @@ impl Config {
             _ => Network::Testnet,
         };
 
-        Self::resolve(network, None, None)
+        Self::resolve(network, None, None, None)
     }
 
     /// Resolve configuration from a `--network` preset plus optional CLI
@@ -186,8 +210,19 @@ impl Config {
         let contract_id = std::env::var("TRELLIS_CONTRACT_ID")
             .unwrap_or_else(|_| "UNSET_CONTRACT_ID".to_string());
 
-        let source_key =
-            std::env::var("TRELLIS_SOURCE_KEY").unwrap_or_else(|_| "UNSET_SOURCE_KEY".to_string());
+        // Source key priority: --source-key-file CLI flag >
+        // TRELLIS_SOURCE_KEY_FILE env var > TRELLIS_SOURCE_KEY env var.
+        // Reading from a file keeps raw `S…` seeds out of argv and out of
+        // the exported-env-var namespace where they leak into
+        // `/proc/<pid>/environ` (#240).
+        let source_key = if let Some(path) = cli_source_key_file {
+            read_source_key_file(&path)?
+        } else if let Ok(path) = std::env::var("TRELLIS_SOURCE_KEY_FILE") {
+            read_source_key_file(&path)?
+        } else {
+            std::env::var("TRELLIS_SOURCE_KEY")
+                .unwrap_or_else(|_| "UNSET_SOURCE_KEY".to_string())
+        };
 
         Ok(Config {
             rpc_url,
@@ -215,7 +250,7 @@ impl Config {
             errors.push("TRELLIS_SOURCE_KEY".to_string());
         }
 
-        if let Err(e) = validate_rpc_url(&self.rpc_url) {
+        if let Err(e) = validate_rpc_url(&self.rpc_url, false) {
             errors.push(e);
         }
 
@@ -234,6 +269,71 @@ impl Config {
             .resolve_source_key(&self.source_key)
             .map_err(|e| format!("Failed to resolve source key: {}", e))
     }
+}
+
+/// Response body from a Soroban RPC `getNetwork` call.
+///
+/// Only the fields we care about are declared; `serde` ignores the rest.
+#[derive(Debug, Deserialize)]
+pub struct GetNetworkResponse {
+    pub passphrase: String,
+}
+
+/// Compare the passphrase returned by the configured RPC endpoint's
+/// `getNetwork` method against `config.network_passphrase`.
+///
+/// A mismatch means the CLI is pointed at one network while signing for
+/// another — e.g. `--rpc-url` aimed at mainnet but `--network-passphrase`
+/// still set to testnet. Without this check the discrepancy only surfaces
+/// much later as a confusing downstream failure, so we surface it here with
+/// both values named explicitly.
+///
+/// Returns `Ok(())` when the passphrases match, or `Err` with a specific
+/// message naming both values when they differ.
+pub fn verify_network_passphrase(
+    config: &Config,
+    remote_passphrase: &str,
+) -> Result<(), String> {
+    if remote_passphrase == config.network_passphrase {
+        return Ok(());
+    }
+    Err(format!(
+        "Network passphrase mismatch: the RPC endpoint at {} reports passphrase \
+         {:?}, but the CLI is configured with {:?}. Point --rpc-url and \
+         --network-passphrase at the same network.",
+        config.rpc_url, remote_passphrase, config.network_passphrase
+    ))
+}
+
+/// Fetch the network passphrase from the configured RPC endpoint and verify
+/// it matches `config.network_passphrase`.
+///
+/// Issues a JSON-RPC 2.0 `getNetwork` request to `config.rpc_url` and compares
+/// the returned `passphrase` against the configured value. Intended to be
+/// called as an early check (e.g. from `validate_environment`) so a
+/// misconfigured endpoint/passphrase pair fails fast with a clear message
+/// instead of a confusing downstream error.
+pub async fn verify_network_passphrase_against_rpc(config: &Config) -> Result<(), String> {
+    let body = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "getNetwork",
+        "params": {},
+    });
+
+    let response = reqwest::Client::new()
+        .post(&config.rpc_url)
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| format!("Failed to reach RPC endpoint {}: {e}", config.rpc_url))?;
+
+    let parsed: GetNetworkResponse = response
+        .json()
+        .await
+        .map_err(|e| format!("Malformed getNetwork response from {}: {e}", config.rpc_url))?;
+
+    verify_network_passphrase(config, &parsed.passphrase)
 }
 
 /// Read a source key from `path`, trimming surrounding whitespace / newlines.
@@ -354,14 +454,14 @@ mod tests {
 
     #[test]
     fn rpc_url_accepts_https_and_http_localhost() {
-        assert!(validate_rpc_url("https://soroban-testnet.stellar.org").is_ok());
-        assert!(validate_rpc_url("http://localhost:8000/soroban/rpc").is_ok());
-        assert!(validate_rpc_url("http://127.0.0.1:8000").is_ok());
+        assert!(validate_rpc_url("https://soroban-testnet.stellar.org", false).is_ok());
+        assert!(validate_rpc_url("http://localhost:8000/soroban/rpc", false).is_ok());
+        assert!(validate_rpc_url("http://127.0.0.1:8000", false).is_ok());
     }
 
     #[test]
     fn rpc_url_rejects_scheme_typo() {
-        let err = validate_rpc_url("httsp://soroban-testnet.stellar.org").unwrap_err();
+        let err = validate_rpc_url("httsp://soroban-testnet.stellar.org", false).unwrap_err();
         assert!(
             err.contains("scheme") || err.contains("valid URL"),
             "got: {err}"
@@ -370,20 +470,20 @@ mod tests {
 
     #[test]
     fn rpc_url_rejects_missing_scheme() {
-        assert!(validate_rpc_url("soroban-testnet.stellar.org").is_err());
+        assert!(validate_rpc_url("soroban-testnet.stellar.org", false).is_err());
     }
 
     #[test]
     fn rpc_url_rejects_non_http_scheme() {
-        assert!(validate_rpc_url("ftp://example.com").is_err());
-        assert!(validate_rpc_url("ws://example.com").is_err());
-        assert!(validate_rpc_url("file:///etc/passwd").is_err());
+        assert!(validate_rpc_url("ftp://example.com", false).is_err());
+        assert!(validate_rpc_url("ws://example.com", false).is_err());
+        assert!(validate_rpc_url("file:///etc/passwd", false).is_err());
     }
 
     #[test]
     fn rpc_url_rejects_empty_host() {
-        assert!(validate_rpc_url("https://").is_err());
-        assert!(validate_rpc_url("http://").is_err());
+        assert!(validate_rpc_url("https://", false).is_err());
+        assert!(validate_rpc_url("http://", false).is_err());
     }
 
     #[test]
@@ -393,5 +493,46 @@ mod tests {
         let err = cfg.validate().unwrap_err();
         assert_eq!(err.len(), 1);
         assert!(err[0].contains("RPC URL"), "got: {:?}", err);
+    }
+
+    // --- verify_network_passphrase (#<issue>) ---
+
+    #[test]
+    fn network_passphrase_matches_configured_value() {
+        let cfg = config_with(&valid_contract_id(), "SABC123");
+        assert!(
+            verify_network_passphrase(&cfg, "Test SDF Network ; September 2015").is_ok()
+        );
+    }
+
+    #[test]
+    fn network_passphrase_mismatch_names_both_values() {
+        let cfg = config_with(&valid_contract_id(), "SABC123");
+        let err = verify_network_passphrase(
+            &cfg,
+            "Public Global Stellar Network ; September 2015",
+        )
+        .unwrap_err();
+        assert!(
+            err.contains("Public Global Stellar Network ; September 2015"),
+            "error should name the remote passphrase, got: {err}"
+        );
+        assert!(
+            err.contains("Test SDF Network ; September 2015"),
+            "error should name the configured passphrase, got: {err}"
+        );
+        assert!(
+            err.contains(&cfg.rpc_url),
+            "error should name the RPC endpoint, got: {err}"
+        );
+    }
+
+    #[test]
+    fn network_passphrase_mismatch_is_not_triggered_by_matching_custom_value() {
+        let mut cfg = config_with(&valid_contract_id(), "SABC123");
+        cfg.network_passphrase = "Standalone Network ; February 2017".to_string();
+        assert!(
+            verify_network_passphrase(&cfg, "Standalone Network ; February 2017").is_ok()
+        );
     }
 }

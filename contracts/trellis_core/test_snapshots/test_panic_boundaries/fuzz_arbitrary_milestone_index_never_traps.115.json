@@ -59,7 +59,7 @@
               "function_name": "init",
               "args": [
                 {
-                  "bytes": "dadadadadadadadadadadadadadadadadadadadadadadadadadadadadadadada"
+                  "bytes": "1313131313131313131313131313131313131313131313131313131313131313"
                 },
                 {
                   "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM"
@@ -338,7 +338,7 @@
                   "symbol": "Agreement"
                 },
                 {
-                  "bytes": "dadadadadadadadadadadadadadadadadadadadadadadadadadadadadadadada"
+                  "bytes": "1313131313131313131313131313131313131313131313131313131313131313"
                 }
               ]
             },
@@ -358,7 +358,7 @@
                       "symbol": "Agreement"
                     },
                     {
-                      "bytes": "dadadadadadadadadadadadadadadadadadadadadadadadadadadadadadadada"
+                      "bytes": "1313131313131313131313131313131313131313131313131313131313131313"
                     }
                   ]
                 },
@@ -370,7 +370,7 @@
                         "symbol": "agreement_id"
                       },
                       "val": {
-                        "bytes": "dadadadadadadadadadadadadadadadadadadadadadadadadadadadadadadada"
+                        "bytes": "1313131313131313131313131313131313131313131313131313131313131313"
                       }
                     },
                     {
@@ -503,6 +503,14 @@
                       },
                       "val": {
                         "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM"
+                      }
+                    },
+                    {
+                      "key": {
+                        "symbol": "released_amounts"
+                      },
+                      "val": {
+                        "map": []
                       }
                     },
                     {

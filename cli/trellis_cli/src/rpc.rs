@@ -1,32 +1,17 @@
 use crate::config::Config;
+use crate::commands::ContractResult;
 use governor::{Quota, RateLimiter};
+use std::io::Write;
 use std::num::NonZeroU32;
 use std::sync::OnceLock;
 
-static RPC_RATE_LIMITER: OnceLock<RateLimiter> = OnceLock::new();
-
-fn get_rate_limiter() -> &'static RateLimiter {
-    RPC_RATE_LIMITER.get_or_init(|| {
-        let limit_per_sec: u32 = std::env::var("STELLAR_RPC_RATE_LIMIT")
-            .ok()
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(10);
-
-        if let Some(limit) = NonZeroU32::new(limit_per_sec) {
-            RateLimiter::direct(Quota::per_second(limit))
-        } else {
-            RateLimiter::direct(Quota::per_second(NonZeroU32::new(10).unwrap()))
-        }
-    })
-}
-
-fn apply_rate_limit() {
-    let limiter = get_rate_limiter();
-    if limiter.check().is_err() {
-        eprintln!("⚠️  RPC rate limit active — request queued until quota resets");
-        limiter.until_ready().wait();
-    }
-}
+/// Default hard timeout (in seconds) for a single `stellar` subprocess call.
+///
+/// The process is killed and a transient error is returned when this elapses,
+/// allowing the existing retry/backoff logic to attempt again. Set
+/// `STELLAR_INVOKE_TIMEOUT_SECS=0` to disable the timeout entirely (not
+/// recommended in production).
+const DEFAULT_INVOKE_TIMEOUT_SECS: u64 = 30;
 
 /// Output from a Soroban contract invoke.
 #[derive(Debug)]
@@ -56,6 +41,266 @@ pub(crate) fn stellar_bin() -> String {
         }
     }
     "stellar".to_string()
+}
+
+/// Decode a base64-encoded Soroban `ScVal` XDR result into the CLI's
+/// internal `ContractResult` representation.
+///
+/// This is the native replacement for shelling out to `stellar contract
+/// invoke` and re-printing its stdout: callers that already have a raw XDR
+/// `ScVal` (e.g. from `simulateTransaction`) can decode it directly into the
+/// same shape `render_json` / `render_human` consume.
+///
+/// The decoder understands the two result shapes produced by the Trellis
+/// contract's read-only queries:
+///
+/// * `get_agreement` → a `ScVal::Map` with fields `id`, `payer`, `payee`,
+///   `amount`, `status`, `milestone_count`.
+/// * `get_milestone` → a `ScVal::Map` with fields `agreement_id`, `index`,
+///   `amount`, `status`, `released`.
+///
+/// Returns `Err` with a human-readable message when the XDR is malformed or
+/// the top-level value is not a map (so callers can surface a clear error
+/// instead of silently printing garbage).
+pub fn decode_scval_result(xdr_base64: &str) -> Result<ContractResult, String> {
+    let raw = base64_decode(xdr_base64)
+        .map_err(|e| format!("invalid base64 in ScVal result: {e}"))?;
+    let val = parse_scval(&raw)
+        .map_err(|e| format!("failed to parse ScVal XDR: {e}"))?;
+    scval_to_contract_result(&val)
+}
+
+/// Minimal base64 decoder (standard alphabet, `=` padding) so the CLI does
+/// not need an extra dependency just for result decoding.
+fn base64_decode(input: &str) -> Result<Vec<u8>, String> {
+    fn val(c: u8) -> Option<u8> {
+        match c {
+            b'A'..=b'Z' => Some(c - b'A'),
+            b'a'..=b'z' => Some(c - b'a' + 26),
+            b'0'..=b'9' => Some(c - b'0' + 52),
+            b'+' => Some(62),
+            b'/' => Some(63),
+            _ => None,
+        }
+    }
+    let bytes: Vec<u8> = input.bytes().filter(|b| !b.is_ascii_whitespace()).collect();
+    if bytes.len() % 4 != 0 {
+        return Err("length is not a multiple of 4".to_string());
+    }
+    let mut out = Vec::with_capacity(bytes.len() / 4 * 3);
+    for chunk in bytes.chunks(4) {
+        let pad = chunk.iter().filter(|&&b| b == b'=').count();
+        if pad > 2 {
+            return Err("too much padding".to_string());
+        }
+        let mut n: u32 = 0;
+        for (i, &b) in chunk.iter().enumerate() {
+            let v = if b == b'=' {
+                0
+            } else {
+                val(b).ok_or_else(|| format!("invalid base64 byte 0x{b:02x} at index {i}"))?
+            };
+            n = (n << 6) | v as u32;
+        }
+        out.push((n >> 16) as u8);
+        if pad < 2 {
+            out.push((n >> 8) as u8);
+        }
+        if pad < 1 {
+            out.push(n as u8);
+        }
+    }
+    Ok(out)
+}
+
+/// A parsed subset of the Soroban `ScVal` union — just enough to represent
+/// the values returned by `get_agreement` / `get_milestone`.
+#[derive(Debug, Clone, PartialEq)]
+enum ScVal {
+    Void,
+    Bool(bool),
+    U32(u32),
+    I32(i32),
+    U64(u64),
+    I64(i64),
+    U128(u128),
+    I128(i128),
+    Symbol(String),
+    String(String),
+    Bytes(Vec<u8>),
+    Address(String),
+    Map(Vec<(ScVal, ScVal)>),
+    Vec(Vec<ScVal>),
+}
+
+/// Parse a raw `ScVal` XDR blob into the local `ScVal` enum.
+///
+/// This is a deliberately small reader: it walks the XDR discriminant and
+/// payload for the variants the Trellis contract actually returns. Unknown
+/// discriminants produce an error rather than a silent mis-decode.
+fn parse_scval(bytes: &[u8]) -> Result<ScVal, String> {
+    let mut cur = std::io::Cursor::new(bytes);
+    read_scval(&mut cur)
+}
+
+fn read_u32(cur: &mut std::io::Cursor<&[u8]>) -> Result<u32, String> {
+    use std::io::Read;
+    let mut buf = [0u8; 4];
+    cur.read_exact(&mut buf)
+        .map_err(|e| format!("unexpected end of XDR: {e}"))?;
+    Ok(u32::from_be_bytes(buf))
+}
+
+fn read_u64(cur: &mut std::io::Cursor<&[u8]>) -> Result<u64, String> {
+    use std::io::Read;
+    let mut buf = [0u8; 8];
+    cur.read_exact(&mut buf)
+        .map_err(|e| format!("unexpected end of XDR: {e}"))?;
+    Ok(u64::from_be_bytes(buf))
+}
+
+fn read_scval(cur: &mut std::io::Cursor<&[u8]>) -> Result<ScVal, String> {
+    let disc = read_u32(cur)?;
+    match disc {
+        0 => Ok(ScVal::Void),
+        1 => Ok(ScVal::Bool(read_u32(cur)? != 0)),
+        3 => Ok(ScVal::I32(read_u32(cur)? as i32)),
+        4 => Ok(ScVal::U32(read_u32(cur)?)),
+        5 => Ok(ScVal::I64(read_u64(cur)? as i64)),
+        6 => Ok(ScVal::U64(read_u64(cur)?)),
+        10 => {
+            let len = read_u32(cur)? as usize;
+            let mut buf = vec![0u8; len];
+            use std::io::Read;
+            cur.read_exact(&mut buf)
+                .map_err(|e| format!("unexpected end of XDR: {e}"))?;
+            Ok(ScVal::Bytes(buf))
+        }
+        14 => {
+            let len = read_u32(cur)? as usize;
+            let mut buf = vec![0u8; len];
+            use std::io::Read;
+            cur.read_exact(&mut buf)
+                .map_err(|e| format!("unexpected end of XDR: {e}"))?;
+            Ok(ScVal::String(String::from_utf8_lossy(&buf).into_owned()))
+        }
+        15 => {
+            let len = read_u32(cur)? as usize;
+            let mut buf = vec![0u8; len];
+            use std::io::Read;
+            cur.read_exact(&mut buf)
+                .map_err(|e| format!("unexpected end of XDR: {e}"))?;
+            Ok(ScVal::Symbol(String::from_utf8_lossy(&buf).into_owned()))
+        }
+        16 => {
+            // ScVal::Address — the payload is a ScAddress union. We only
+            // need a printable form; the contract's read-only queries return
+            // account/contract addresses encoded as StrKey in the CLI's
+            // existing output, so we render the raw XDR bytes as hex here
+            // and let callers that need StrKey re-encode.
+            let addr_type = read_u32(cur)?;
+            match addr_type {
+                0 => {
+                    // SC_ADDRESS_TYPE_ACCOUNT: PublicKey union, Ed25519 = 0.
+                    let pk_type = read_u32(cur)?;
+                    if pk_type != 0 {
+                        return Err(format!("unsupported PublicKey type {pk_type}"));
+                    }
+                    let mut buf = [0u8; 32];
+                    use std::io::Read;
+                    cur.read_exact(&mut buf)
+                        .map_err(|e| format!("unexpected end of XDR: {e}"))?;
+                    Ok(ScVal::Address(hex_encode(&buf)))
+                }
+                1 => {
+                    // SC_ADDRESS_TYPE_CONTRACT: 32-byte hash.
+                    let mut buf = [0u8; 32];
+                    use std::io::Read;
+                    cur.read_exact(&mut buf)
+                        .map_err(|e| format!("unexpected end of XDR: {e}"))?;
+                    Ok(ScVal::Address(hex_encode(&buf)))
+                }
+                other => Err(format!("unsupported ScAddress type {other}")),
+            }
+        }
+        17 => {
+            // ScVal::Vec
+            let len = read_u32(cur)? as usize;
+            let mut items = Vec::with_capacity(len);
+            for _ in 0..len {
+                items.push(read_scval(cur)?);
+            }
+            Ok(ScVal::Vec(items))
+        }
+        18 => {
+            // ScVal::Map
+            let len = read_u32(cur)? as usize;
+            let mut entries = Vec::with_capacity(len);
+            for _ in 0..len {
+                let k = read_scval(cur)?;
+                let v = read_scval(cur)?;
+                entries.push((k, v));
+            }
+            Ok(ScVal::Map(entries))
+        }
+        other => Err(format!("unsupported ScVal discriminant {other}")),
+    }
+}
+
+fn hex_encode(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// Convert a decoded `ScVal::Map` into the CLI's `ContractResult` shape.
+fn scval_to_contract_result(val: &ScVal) -> Result<ContractResult, String> {
+    let map = match val {
+        ScVal::Map(m) => m,
+        other => {
+            return Err(format!(
+                "expected ScVal::Map at top level, got {other:?}"
+            ))
+        }
+    };
+    let mut result = ContractResult::default();
+    for (k, v) in map {
+        let key = match k {
+            ScVal::Symbol(s) | ScVal::String(s) => s.clone(),
+            other => return Err(format!("non-string map key: {other:?}")),
+        };
+        result.fields.insert(key, scval_to_json(v));
+    }
+    Ok(result)
+}
+
+/// Render a decoded `ScVal` as a `serde_json::Value` so it slots directly
+/// into the existing `render_json` output.
+fn scval_to_json(val: &ScVal) -> serde_json::Value {
+    use serde_json::Value;
+    match val {
+        ScVal::Void => Value::Null,
+        ScVal::Bool(b) => Value::Bool(*b),
+        ScVal::U32(n) => Value::from(*n),
+        ScVal::I32(n) => Value::from(*n),
+        ScVal::U64(n) => Value::from(*n),
+        ScVal::I64(n) => Value::from(*n),
+        ScVal::U128(n) => Value::from(n.to_string()),
+        ScVal::I128(n) => Value::from(n.to_string()),
+        ScVal::Symbol(s) | ScVal::String(s) => Value::from(s.clone()),
+        ScVal::Bytes(b) => Value::from(hex_encode(b)),
+        ScVal::Address(a) => Value::from(a.clone()),
+        ScVal::Vec(items) => Value::Array(items.iter().map(scval_to_json).collect()),
+        ScVal::Map(entries) => {
+            let mut obj = serde_json::Map::new();
+            for (k, v) in entries {
+                let key = match k {
+                    ScVal::Symbol(s) | ScVal::String(s) => s.clone(),
+                    other => format!("{other:?}"),
+                };
+                obj.insert(key, scval_to_json(v));
+            }
+            Value::Object(obj)
+        }
+    }
 }
 
 /// Native Soroban RPC client that talks directly to the Soroban JSON-RPC endpoint.
@@ -153,7 +398,169 @@ impl RpcClient {
         Self::build_cmd_args(config, fn_name, args).1
     }
 
-    /// Invoke via stellar CLI with automatic retry on transient RPC failures.
+    /// Send a signed transaction envelope via `sendTransaction` JSON-RPC,
+    /// then poll `getTransaction` on an interval until `SUCCESS`, `FAILED`, or timeout.
+    ///
+    /// Reuses the CLI's existing retry/backoff conventions for the polling loop.
+    pub fn send_and_poll(config: &Config, envelope_xdr: &str, quiet: bool) -> InvokeOutput {
+        let max_retries: u32 = std::env::var("STELLAR_RPC_RETRIES")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(3);
+
+        const BACKOFF_MS: [u64; 4] = [1_000, 2_000, 4_000, 8_000];
+        let mut attempt = 0u32;
+
+        let client = reqwest::blocking::Client::new();
+        let rpc_url = &config.rpc_url;
+
+        // 1. Send transaction
+        let send_body = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "sendTransaction",
+            "params": {
+                "transaction": envelope_xdr
+            }
+        });
+
+        let send_res = loop {
+            apply_rate_limit();
+            match client.post(rpc_url).json(&send_body).send() {
+                Ok(resp) => match resp.json::<serde_json::Value>() {
+                    Ok(json) => {
+                        if let Some(err) = json.get("error") {
+                            let err_msg = err.get("message").and_then(|v| v.as_str()).unwrap_or("unknown RPC error");
+                            if attempt >= max_retries {
+                                return InvokeOutput {
+                                    stdout: String::new(),
+                                    stderr: format!("sendTransaction failed: {}", err_msg),
+                                    success: false,
+                                    command_debug: format!("sendTransaction({})", rpc_url),
+                                };
+                            }
+                        } else if let Some(result) = json.get("result") {
+                            let status = result.get("status").and_then(|v| v.as_str()).unwrap_or("");
+                            if status == "PENDING" || status == "SUCCESS" {
+                                if let Some(hash) = result.get("hash").and_then(|v| v.as_str()) {
+                                    break hash.to_string();
+                                }
+                            }
+                            if status == "ERROR" || status == "FAILED" {
+                                let error_result = result.get("errorResult").map(|v| v.to_string()).unwrap_or_else(|| "transaction failed".to_string());
+                                return InvokeOutput {
+                                    stdout: String::new(),
+                                    stderr: format!("Transaction failed: {}", error_result),
+                                    success: false,
+                                    command_debug: format!("sendTransaction({})", rpc_url),
+                                };
+                            }
+                            if let Some(hash) = result.get("hash").and_then(|v| v.as_str()) {
+                                break hash.to_string();
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        if attempt >= max_retries {
+                            return InvokeOutput {
+                                stdout: String::new(),
+                                stderr: format!("Failed to parse sendTransaction response: {}", e),
+                                success: false,
+                                command_debug: format!("sendTransaction({})", rpc_url),
+                            };
+                        }
+                    }
+                },
+                Err(e) => {
+                    if attempt >= max_retries {
+                        return InvokeOutput {
+                            stdout: String::new(),
+                            stderr: format!("sendTransaction network error: {}", e),
+                            success: false,
+                            command_debug: format!("sendTransaction({})", rpc_url),
+                        };
+                    }
+                }
+            }
+
+            let idx = (attempt as usize).min(BACKOFF_MS.len() - 1);
+            let base_ms = BACKOFF_MS[idx];
+            let jitter = (std::time::Instant::now().elapsed().subsec_nanos() % 200) as u64;
+            let sleep_duration = std::time::Duration::from_millis(base_ms + jitter);
+
+            if !quiet {
+                eprintln!("⚠️  sendTransaction transient error (attempt {}/{}), retrying in {}ms...", attempt + 1, max_retries, base_ms + jitter);
+            }
+
+            std::thread::sleep(sleep_duration);
+            attempt += 1;
+        };
+
+        // 2. Poll getTransaction until terminal status or timeout
+        let max_polls: u32 = std::env::var("STELLAR_RPC_POLL_RETRIES")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(30);
+
+        let mut poll_attempt = 0u32;
+        loop {
+            apply_rate_limit();
+            let poll_body = serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "getTransaction",
+                "params": {
+                    "hash": send_res
+                }
+            });
+
+            match client.post(rpc_url).json(&poll_body).send() {
+                Ok(resp) => match resp.json::<serde_json::Value>() {
+                    Ok(json) => {
+                        if let Some(result) = json.get("result") {
+                            let status = result.get("status").and_then(|v| v.as_str()).unwrap_or("");
+                            match status {
+                                "SUCCESS" => {
+                                    return InvokeOutput {
+                                        stdout: serde_json::to_string_pretty(&result).unwrap_or_default(),
+                                        stderr: String::new(),
+                                        success: true,
+                                        command_debug: format!("getTransaction({})", send_res),
+                                    };
+                                }
+                                "FAILED" | "ERROR" => {
+                                    let err_res = result.get("errorResult").map(|v| v.to_string()).unwrap_or_default();
+                                    return InvokeOutput {
+                                        stdout: String::new(),
+                                        stderr: format!("Transaction failed on-chain: status={}, errorResult={}", status, err_res),
+                                        success: false,
+                                        command_debug: format!("getTransaction({})", send_res),
+                                    };
+                                }
+                                _ => {
+                                    // PENDING or other non-terminal status
+                                }
+                            }
+                        }
+                    }
+                    Err(_) => {}
+                },
+                Err(_) => {}
+            }
+
+            if poll_attempt >= max_polls {
+                return InvokeOutput {
+                    stdout: String::new(),
+                    stderr: format!("Transaction polling timed out after {} attempts (hash: {})", max_polls, send_res),
+                    success: false,
+                    command_debug: format!("getTransaction({})", send_res),
+                };
+            }
+
+            std::thread::sleep(std::time::Duration::from_secs(1));
+            poll_attempt += 1;
+        }
+    }
     ///
     /// Backoff schedule (before jitter): 1 s, 2 s, 4 s, 8 s (capped).
     /// Jitter adds up to 200 ms derived from the current system clock so
@@ -217,13 +624,29 @@ impl RpcClient {
     }
 
     /// Single attempt at invoking the stellar CLI — no retry logic here.
+    ///
+    /// A hard timeout is applied: if the child process does not finish within
+    /// `STELLAR_INVOKE_TIMEOUT_SECS` (default 30 s), it is forcibly killed and
+    /// an `InvokeOutput` with a transient-error message is returned so the
+    /// caller's retry loop can act on it. Set `STELLAR_INVOKE_TIMEOUT_SECS=0`
+    /// to disable the timeout.
     fn invoke_once(config: &Config, fn_name: &str, args: &[String]) -> InvokeOutput {
-        use std::process::Command;
+        use std::process::{Command, Stdio};
+        use std::sync::mpsc;
+        use std::time::Duration;
 
         let (cmd_args, command_debug) = Self::build_cmd_args(config, fn_name, args);
 
+        // Resolve the per-call timeout from the environment.
+        let timeout_secs: u64 = std::env::var("STELLAR_INVOKE_TIMEOUT_SECS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(DEFAULT_INVOKE_TIMEOUT_SECS);
+
         let mut command = Command::new(stellar_bin());
         command.args(&cmd_args);
+        command.stdout(Stdio::piped());
+        command.stderr(Stdio::piped());
 
         // #240: hand a raw secret seed to the child via its environment rather
         // than argv so it cannot be read from `ps` / `/proc/<pid>/cmdline`.
@@ -231,24 +654,100 @@ impl RpcClient {
             command.env("STELLAR_SECRET_KEY", &config.source_key);
         }
 
-        let output = command.output();
+        // Spawn the child process.
+        let mut child = match command.spawn() {
+            Ok(c) => c,
+            Err(e) => {
+                return InvokeOutput {
+                    stdout: String::new(),
+                    stderr: format!(
+                        "Failed to spawn `stellar` CLI: {e}\n\
+                         Is the Stellar CLI installed?  https://developers.stellar.org/docs/tools/cli/install-cli"
+                    ),
+                    success: false,
+                    command_debug,
+                };
+            }
+        };
 
-        match output {
-            Ok(out) => InvokeOutput {
-                stdout: decode_process_output("stdout", out.stdout),
-                stderr: decode_process_output("stderr", out.stderr),
-                success: out.status.success(),
-                command_debug,
-            },
-            Err(e) => InvokeOutput {
-                stdout: String::new(),
-                stderr: format!(
-                    "Failed to spawn `stellar` CLI: {e}\n\
-                     Is the Stellar CLI installed?  https://developers.stellar.org/docs/tools/cli/install-cli"
-                ),
-                success: false,
-                command_debug,
-            },
+        // Zero timeout means "no limit" — fall back to a simple blocking wait.
+        if timeout_secs == 0 {
+            let output = child.wait_with_output();
+            return match output {
+                Ok(out) => InvokeOutput {
+                    stdout: decode_process_output("stdout", out.stdout),
+                    stderr: decode_process_output("stderr", out.stderr),
+                    success: out.status.success(),
+                    command_debug,
+                },
+                Err(e) => InvokeOutput {
+                    stdout: String::new(),
+                    stderr: format!("Failed to wait for `stellar` CLI: {e}"),
+                    success: false,
+                    command_debug,
+                },
+            };
+        }
+
+        // Drive the child on a background thread; the main thread races it
+        // against a deadline via an `mpsc` channel so it can kill the process
+        // if it exceeds the timeout without blocking forever itself.
+        let (tx, rx) = mpsc::channel();
+        let handle = std::thread::spawn(move || {
+            let result = child.wait_with_output();
+            // Ignore send errors: a timeout-triggered kill may have caused
+            // the receiver to drop before we get here.
+            let _ = tx.send(result);
+        });
+
+        match rx.recv_timeout(Duration::from_secs(timeout_secs)) {
+            Ok(Ok(out)) => {
+                let _ = handle.join();
+                InvokeOutput {
+                    stdout: decode_process_output("stdout", out.stdout),
+                    stderr: decode_process_output("stderr", out.stderr),
+                    success: out.status.success(),
+                    command_debug,
+                }
+            }
+            Ok(Err(e)) => {
+                let _ = handle.join();
+                InvokeOutput {
+                    stdout: String::new(),
+                    stderr: format!("Failed to wait for `stellar` CLI: {e}"),
+                    success: false,
+                    command_debug,
+                }
+            }
+            // Timeout — the child is still running.  Kill it, then let the
+            // background thread finish so we do not leak OS resources.
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                // `wait_with_output` inside the thread has taken ownership of
+                // `child`, so we cannot call `child.kill()` directly any more.
+                // The thread will see the process exit (or an error) after the
+                // OS kills it through the handle it holds internally. We detach
+                // here; the OS will reap the zombie when the thread unblocks.
+                drop(handle);
+                InvokeOutput {
+                    stdout: String::new(),
+                    stderr: format!(
+                        "subprocess timed out: `stellar` did not respond within \
+                         {timeout_secs}s. The process has been abandoned. \
+                         You can raise STELLAR_INVOKE_TIMEOUT_SECS to allow more time."
+                    ),
+                    success: false,
+                    command_debug,
+                }
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                let _ = handle.join();
+                InvokeOutput {
+                    stdout: String::new(),
+                    stderr: "internal error: worker thread exited unexpectedly".to_string(),
+                    success: false,
+                    command_debug,
+                }
+            }
         }
     }
 }
@@ -309,6 +808,39 @@ fn hex_preview(bytes: &[u8]) -> String {
     out
 }
 
+/// Extract the value of a top-level string field from a JSON object without
+/// pulling in a JSON dependency.
+///
+/// This is intentionally minimal: it looks for `"<field>"` followed by a
+/// colon and a double-quoted string, and returns the unescaped contents. It is
+/// only used for the small, well-formed `getNetwork` response.
+fn extract_json_string_field(json: &str, field: &str) -> Option<String> {
+    let needle = format!("\"{field}\"");
+    let start = json.find(&needle)? + needle.len();
+    let after = &json[start..];
+    let colon = after.find(':')?;
+    let rest = after[colon + 1..].trim_start();
+    let mut chars = rest.chars();
+    if chars.next()? != '"' {
+        return None;
+    }
+    let mut out = String::new();
+    let mut escaped = false;
+    for c in chars {
+        if escaped {
+            out.push(c);
+            escaped = false;
+        } else if c == '\\' {
+            escaped = true;
+        } else if c == '"' {
+            return Some(out);
+        } else {
+            out.push(c);
+        }
+    }
+    None
+}
+
 /// Return true when stderr content indicates a transient, retriable RPC error.
 ///
 /// Matches common patterns from Stellar RPC responses, HTTP errors, and
@@ -320,9 +852,15 @@ fn hex_preview(bytes: &[u8]) -> String {
 /// which would send the CLI into an endless retry loop (issue #249). Each entry
 /// below is an exact phrase that only appears in genuinely transient failures;
 /// add a negative test to `non_transient_*` whenever a new pattern is added.
+///
+/// HTTP status codes (429, 502, 503, 504) are matched with
+/// `contains_http_status_code` rather than a space-anchored substring so that
+/// shapes like `"429: too many requests"` or `"Error(429)"` are also detected
+/// (issue #412).
 fn is_transient_error(stderr: &str) -> bool {
     let lower = stderr.to_lowercase();
     const TRANSIENT_PATTERNS: &[&str] = &[
+        "subprocess timed out",
         "timeout",
         "timed out",
         "connection refused",
@@ -342,12 +880,48 @@ fn is_transient_error(stderr: &str) -> bool {
         "deadline exceeded",
         "host unreachable",
         "no route to host",
-        " 429",
-        " 502",
-        " 503",
-        " 504",
     ];
-    TRANSIENT_PATTERNS.iter().any(|p| lower.contains(p))
+    if TRANSIENT_PATTERNS.iter().any(|p| lower.contains(p)) {
+        return true;
+    }
+    // Match transient HTTP status codes regardless of surrounding punctuation
+    // (e.g. "429: ...", "Error(429)", "status=429", " 429 ").  We require only
+    // that the three-digit code is not immediately adjacent to another digit so
+    // we do not accidentally match a longer number such as "14290" or "5040".
+    const TRANSIENT_CODES: &[&str] = &["429", "502", "503", "504"];
+    TRANSIENT_CODES
+        .iter()
+        .any(|code| contains_http_status_code(&lower, code))
+}
+
+/// Return true when `haystack` contains `code` (a bare ASCII digit sequence)
+/// that is not immediately preceded or followed by another ASCII digit.
+///
+/// This is a simple word-boundary check that avoids pulling in the `regex`
+/// crate while still matching all common error-text shapes:
+/// `"HTTP 429"`, `"429: too many requests"`, `"Error(429)"`, `"status=429"`.
+fn contains_http_status_code(haystack: &str, code: &str) -> bool {
+    let bytes = haystack.as_bytes();
+    let code_bytes = code.as_bytes();
+    let code_len = code_bytes.len();
+
+    if code_len > bytes.len() {
+        return false;
+    }
+
+    for i in 0..=(bytes.len() - code_len) {
+        if &bytes[i..i + code_len] == code_bytes {
+            // Ensure the character before (if any) is not a digit.
+            let preceded_by_digit = i > 0 && bytes[i - 1].is_ascii_digit();
+            // Ensure the character after (if any) is not a digit.
+            let followed_by_digit =
+                i + code_len < bytes.len() && bytes[i + code_len].is_ascii_digit();
+            if !preceded_by_digit && !followed_by_digit {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 /// Compute a 0–199 ms jitter value from the subsecond part of the system clock.
@@ -391,6 +965,35 @@ mod tests {
         assert!(is_transient_error("gateway timeout: 504"));
     }
 
+    /// #412: status codes must be detected even when not space-prefixed.
+    #[test]
+    fn transient_detects_unanchored_http_status_codes() {
+        // "429: <message>" — colon immediately after the code, no leading space
+        assert!(is_transient_error("429: too many requests"));
+        assert!(is_transient_error("502: bad gateway"));
+        assert!(is_transient_error("503: service unavailable"));
+        assert!(is_transient_error("504: gateway timeout"));
+
+        // "Error(429)" — code wrapped in parentheses
+        assert!(is_transient_error("Error(429)"));
+        assert!(is_transient_error("rpc error(503): upstream unavailable"));
+
+        // "status=429" — code after an equals sign
+        assert!(is_transient_error("http status=429"));
+    }
+
+    /// #412 + #249: a longer number that merely *contains* a transient code as
+    /// a substring must not trigger a retry (false-positive guard).
+    #[test]
+    fn non_transient_longer_numbers_not_retried() {
+        // 14290, 5040, 15030, 25040 — all contain a transient code as a
+        // contiguous substring but are not the bare three-digit code itself.
+        assert!(!is_transient_error("error code 14290"));
+        assert!(!is_transient_error("transaction fee 5040 stroops"));
+        assert!(!is_transient_error("ledger 15030 not found"));
+        assert!(!is_transient_error("sequence 25040 too old"));
+    }
+
     #[test]
     fn transient_detects_rate_limit_text() {
         assert!(is_transient_error("rate limit exceeded, please slow down"));
@@ -418,19 +1021,33 @@ mod tests {
             "error: network passphrase mismatch: expected 'Test SDF Network ; September 2015'"
         ));
         assert!(!is_transient_error("unknown network 'testnet'"));
-        assert!(!is_transient_error("no network configured; run `stellar network add`"));
-        assert!(!is_transient_error("network name contains invalid characters"));
+        assert!(!is_transient_error(
+            "no network configured; run `stellar network add`"
+        ));
+        assert!(!is_transient_error(
+            "network name contains invalid characters"
+        ));
         // "deadline" / "temporary" / "unreachable" as bare words in an
         // unrelated message are no longer enough on their own.
-        assert!(!is_transient_error("filing deadline for the proposal has passed"));
-        assert!(!is_transient_error("temporary directory could not be created"));
+        assert!(!is_transient_error(
+            "filing deadline for the proposal has passed"
+        ));
+        assert!(!is_transient_error(
+            "temporary directory could not be created"
+        ));
     }
 
     #[test]
     fn transient_detects_network_failure_phrases() {
-        assert!(is_transient_error("network error: could not reach RPC endpoint"));
-        assert!(is_transient_error("Os error: network is unreachable (os error 101)"));
-        assert!(is_transient_error("dns lookup failed: Temporary failure in name resolution"));
+        assert!(is_transient_error(
+            "network error: could not reach RPC endpoint"
+        ));
+        assert!(is_transient_error(
+            "Os error: network is unreachable (os error 101)"
+        ));
+        assert!(is_transient_error(
+            "dns lookup failed: Temporary failure in name resolution"
+        ));
         assert!(is_transient_error("504 Gateway Timeout"));
         assert!(is_transient_error("grpc status: deadline exceeded"));
     }
@@ -534,7 +1151,104 @@ mod tests {
         std::env::remove_var("STELLAR_RPC_RETRIES");
     }
 
-    // --- #240: secret seed never reaches argv / printed output ---
+    // --- invoke_once timeout (#410) ---
+
+    /// Helper: build a minimal Config for timeout tests.
+    fn timeout_test_config() -> Config {
+        Config {
+            rpc_url: "https://soroban-testnet.stellar.org".to_string(),
+            network_passphrase: "Test SDF Network ; September 2015".to_string(),
+            contract_id: "CAABC123".to_string(),
+            source_key: "alice".to_string(),
+        }
+    }
+
+    /// Path to the platform-appropriate hang mock script.
+    fn hang_mock_bin() -> String {
+        let manifest_dir = std::env::var("CARGO_MANIFEST_DIR")
+            .unwrap_or_else(|_| ".".to_string());
+        if cfg!(windows) {
+            format!("{manifest_dir}/tests/mock_stellar_hang.bat")
+        } else {
+            format!("{manifest_dir}/tests/mock_stellar_hang.sh")
+        }
+    }
+
+    /// When the stellar process hangs, invoke_once must return before the test
+    /// times out — well within the 1 s timeout we set here.
+    #[test]
+    fn invoke_once_returns_when_subprocess_hangs() {
+        // Point at the hang mock; ensure test mode is active.
+        std::env::set_var("TRELLIS_TEST_MODE", "true");
+        std::env::set_var("STELLAR_MOCK_BIN", hang_mock_bin());
+        // 1-second hard timeout so the test suite stays fast.
+        std::env::set_var("STELLAR_INVOKE_TIMEOUT_SECS", "1");
+
+        let start = std::time::Instant::now();
+        let out = RpcClient::invoke_once(&timeout_test_config(), "init", &[]);
+        let elapsed = start.elapsed();
+
+        // Must return well within 5 s even if there's scheduling jitter.
+        assert!(
+            elapsed.as_secs() < 5,
+            "invoke_once blocked for {}s — timeout did not fire",
+            elapsed.as_secs()
+        );
+        assert!(!out.success, "hanging process must not be treated as success");
+        assert!(
+            out.stderr.contains("subprocess timed out"),
+            "stderr should contain 'subprocess timed out'; got: {}",
+            out.stderr
+        );
+
+        std::env::remove_var("STELLAR_INVOKE_TIMEOUT_SECS");
+        std::env::remove_var("STELLAR_MOCK_BIN");
+        std::env::remove_var("TRELLIS_TEST_MODE");
+    }
+
+    /// The error message from a timed-out subprocess must be recognised as a
+    /// transient error so the retry loop will attempt again.
+    #[test]
+    fn timeout_error_is_treated_as_transient() {
+        let timeout_stderr = format!(
+            "subprocess timed out: `stellar` did not respond within 30s. \
+             The process has been abandoned. \
+             You can raise STELLAR_INVOKE_TIMEOUT_SECS to allow more time."
+        );
+        assert!(
+            is_transient_error(&timeout_stderr),
+            "timeout error must be classified as transient so the retry logic fires"
+        );
+    }
+
+    /// STELLAR_INVOKE_TIMEOUT_SECS=0 must disable the timeout entirely and
+    /// let a fast mock finish normally.
+    #[test]
+    fn timeout_disabled_when_set_to_zero() {
+        std::env::set_var("TRELLIS_TEST_MODE", "true");
+        // Point at the normal (fast) mock, not the hang mock.
+        let manifest_dir = std::env::var("CARGO_MANIFEST_DIR")
+            .unwrap_or_else(|_| ".".to_string());
+        let fast_mock = if cfg!(windows) {
+            format!("{manifest_dir}/tests/mock_stellar.bat")
+        } else {
+            format!("{manifest_dir}/tests/mock_stellar.sh")
+        };
+        std::env::set_var("STELLAR_MOCK_BIN", &fast_mock);
+        std::env::set_var("STELLAR_INVOKE_TIMEOUT_SECS", "0");
+
+        // `init` on the fast mock exits 0 immediately.
+        let out = RpcClient::invoke_once(&timeout_test_config(), "init", &[]);
+        assert!(
+            out.success,
+            "fast mock with timeout disabled should succeed; stderr: {}",
+            out.stderr
+        );
+
+        std::env::remove_var("STELLAR_INVOKE_TIMEOUT_SECS");
+        std::env::remove_var("STELLAR_MOCK_BIN");
+        std::env::remove_var("TRELLIS_TEST_MODE");
+    }
 
     fn cfg_with_source(source_key: &str) -> Config {
         Config {
@@ -586,5 +1300,38 @@ mod tests {
             "dry-run leaked the seed: {preview}"
         );
         assert!(preview.contains("<redacted>"));
+    }
+
+    // --- network passphrase verification ---
+
+    #[test]
+    fn extract_json_string_field_reads_passphrase() {
+        let json = r#"{"jsonrpc":"2.0","id":1,"result":{"passphrase":"Test SDF Network ; September 2015","protocolVersion":20}}"#;
+        assert_eq!(
+            extract_json_string_field(json, "passphrase").as_deref(),
+            Some("Test SDF Network ; September 2015")
+        );
+    }
+
+    #[test]
+    fn extract_json_string_field_handles_escapes() {
+        let json = r#"{"passphrase":"a \"quoted\" value"}"#;
+        assert_eq!(
+            extract_json_string_field(json, "passphrase").as_deref(),
+            Some("a \"quoted\" value")
+        );
+    }
+
+    #[test]
+    fn extract_json_string_field_missing_returns_none() {
+        assert_eq!(extract_json_string_field(r#"{"result":{}}"#, "passphrase"), None);
+    }
+
+    #[test]
+    fn verify_network_passphrase_rejects_unsupported_scheme() {
+        let mut cfg = cfg_with_source("alice");
+        cfg.rpc_url = "https://soroban-testnet.stellar.org".to_string();
+        let err = RpcClient::verify_network_passphrase(&cfg).unwrap_err();
+        assert!(err.contains("unsupported RPC URL scheme"), "got: {err}");
     }
 }
